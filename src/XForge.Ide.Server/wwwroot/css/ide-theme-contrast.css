@@ -1,0 +1,128 @@
+/* ============================================================================
+ * XForge IDE — camada de contraste WCAG AA por tema (SC 1.4.3 / 1.4.11)
+ *
+ * Problema medido (gate qa-ui-a11y, 37 rotas):
+ *   - tema claro: --color-primary-500 (4,47:1), --color-text-muted/subtle
+ *     (4,34:1 sobre superfície 100) e os tokens semânticos usados como TEXTO
+ *     via utilitários .text-success/.text-warning/.text-danger (3,30 / 2,15 /
+ *     4,41:1) ficavam abaixo de 4,5:1;
+ *   - tema escuro: --color-text-subtle (4,24:1) e os mesmos utilitários
+ *     semânticos consumindo tokens base claros (3,30 a 4,18:1).
+ *
+ * Estratégia:
+ *   1. utilitários semânticos de texto passam a consumir os tokens *-text —
+ *      que o design system já reserva para texto — em vez dos tokens base,
+ *      pensados para FUNDO/BORDA;
+ *   2. cada tema declara *-text (e os textos auxiliares) com contraste
+ *      >= 4,5:1 sobre as superfícies DESSE tema;
+ *   3. o tema claro escurece primary-500/muted/subtle/success/danger,
+ *      corrigindo também os usos como FUNDO com texto branco
+ *      (branco sobre success passa de 3,30:1 para 5,71:1).
+ *
+ * Carregado DEPOIS de xf-designsystem.css (ver Components/App.razor) para
+ * prevalecer sobre os tokens do design system sem depender de especificidade
+ * maior; os seletores de tema garantem que cada bloco só valha no seu tema
+ * (inclusive no modo automático por prefers-color-scheme).
+ *
+ * Limites conhecidos (documentados em docs/PARIDADE.md):
+ *   - as marcas do rail da IDE (brand-home, brand-data...) não têm paleta no
+ *     design system e usam a escala padrão; o ajuste de primary vale para
+ *     elas. As paletas reais do DS (brand-forms, brand-feedback...) não são
+ *     carregadas neste app e por isso não são afetadas;
+ *   - estados não renderizados (menus abertos, diálogos) não são medidos;
+ *   - superfície 300 é exclusivamente de borda/track, não de texto.
+ *
+ * Validado por: ide/scripts/qa-ui-a11y.mjs -> window.__qaContrastAudit,
+ * que mede claro e escuro em todas as rotas e bloqueia o gate.
+ * ========================================================================== */
+
+/* --------------------------------------------------------------------------
+ * 1) TEXTO SEMÂNTICO -> tokens de texto (definidos por tema logo abaixo)
+ * ------------------------------------------------------------------------ */
+.text-success { color: var(--color-success-text); }
+.text-warning { color: var(--color-warning-text); }
+.text-danger { color: var(--color-danger-text); }
+.text-info { color: var(--color-info-text); }
+.text-secondary { color: var(--color-text-secondary); }
+
+/* --------------------------------------------------------------------------
+ * 2) TEMA CLARO
+ *    Pior caso exigido: 4,5:1 sobre branco, surface-50, surface-100 e
+ *    surface-200 (o pior deles, surface-200, é referência dos valores).
+ *
+ *    Nota sobre data-brand: o rail da IDE grava marcas (brand-home, brand-data,
+ *    brand-code...) que NAO possuem paleta em xf-designsystem.css — a lista de
+ *    paletas do DS cobre apenas components/display/forms/feedback/layout/
+ *    navigation/overlays/tokens. Sem paleta, esses tokens caem na escala
+ *    padrão (índigo), por isso o ajuste de primary vale sem restrição de marca
+ *    nesta aplicação. O DS docs, que usa as paletas reais, não carrega este
+ *    arquivo — a identidade de marca deixa intacta lá.
+ * ------------------------------------------------------------------------ */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --color-text-muted: rgb(85 100 122);   /* 6,02:1 branco / 4,88:1 surface-200 */
+    --color-text-subtle: rgb(85 100 122);
+    --color-primary-500: rgb(79 70 229);    /* 6,29:1 branco (era 4,47:1) */
+    --color-primary-hover: rgb(67 56 203);  /* 7,87:1 — hover sólido com texto branco */
+    --color-primary-active: rgb(55 48 163); /* 9,93:1 */
+    --color-success: rgb(19 118 56);        /* 5,71:1 branco (era 3,30:1) */
+    --color-success-hover: rgb(15 105 49);
+    --color-success-active: rgb(11 87 41);
+    --color-success-text: rgb(19 118 56);   /* texto em qualquer superfície clara */
+    --color-danger: rgb(180 35 35);         /* 5,98:1 sobre surface-100 (era 4,41:1) */
+    --color-danger-hover: rgb(155 27 27);
+    --color-danger-active: rgb(130 22 22);
+  }
+}
+
+:root[data-theme="light"] {
+  --color-text-muted: rgb(85 100 122);
+  --color-text-subtle: rgb(85 100 122);
+  --color-primary-500: rgb(79 70 229);     /* 6,29:1 branco (era 4,47:1) */
+  --color-primary-hover: rgb(67 56 203);
+  --color-primary-active: rgb(55 48 163);
+  --color-success: rgb(19 118 56);
+  --color-success-hover: rgb(15 105 49);
+  --color-success-active: rgb(11 87 41);
+  --color-success-text: rgb(19 118 56);
+  --color-danger: rgb(180 35 35);
+  --color-danger-hover: rgb(155 27 27);
+  --color-danger-active: rgb(130 22 22);
+}
+
+/* --------------------------------------------------------------------------
+ * 3) TEMA ESCURO
+ *    Tokens de texto claros o suficiente para as superfícies escuras
+ *    (bg-surface 2 6 23, bg 15 23 42, surface-50/100 30 41 59, 51 65 85).
+ *
+ *    success/danger são escurecidos um passo da escala porque o XFBadge sólido
+ *    fixa `text-white` (não consome --color-*-contrast): branco sobre
+ *    rgb(22 163 74) = 3,30:1 e sobre rgb(220 38 38) = 3,27:1, ambos abaixo de
+ *    AA para texto de 12px. Com green-700/red-700 o branco passa a 5,02:1 e
+ *    5,98:1. Pontos (ToneDot) e bordas ficam em 3,06:1 contra surface-100,
+ *    atendendo também a SC 1.4.11. Os usos como TEXTO já foram remapeados
+ *    para os tokens *-text acima e não dependem desses valores.
+ * ------------------------------------------------------------------------ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --color-text-muted: rgb(165 180 200);   /* 4,91:1 sobre surface-200 */
+    --color-text-subtle: rgb(165 180 200);  /* era 4,24:1 sobre bg-surface */
+    --color-success: rgb(21 128 61);         /* branco: 5,02:1 (era 3,30:1) */
+    --color-danger: rgb(185 28 28);          /* branco: 5,98:1 (era 3,27:1) */
+    --color-success-text: rgb(134 239 172);  /* 10,4:1 sobre surface-100 */
+    --color-warning-text: rgb(253 230 138);  /* 11,8:1 */
+    --color-danger-text: rgb(252 165 165);   /* 7,7:1 */
+    --color-info-text: rgb(147 197 253);     /* 8,1:1 */
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-text-muted: rgb(165 180 200);
+  --color-text-subtle: rgb(165 180 200);
+  --color-success: rgb(21 128 61);
+  --color-danger: rgb(185 28 28);
+  --color-success-text: rgb(134 239 172);
+  --color-warning-text: rgb(253 230 138);
+  --color-danger-text: rgb(252 165 165);
+  --color-info-text: rgb(147 197 253);
+}

@@ -327,6 +327,120 @@ window.__qaClickLabel = (label) => {
   element.click();
   return true;
 };
+
+// ---------------------------------------------------------- contraste WCAG 2.1
+// Verificador independente: mede cores computadas do DOM renderizado e aplica a
+// fórmula de luminância relativa da WCAG (1.4.3 Contraste Mínimo — AA).
+// Exceções da própria norma: texto decorativo/inativo e fundo indeterminado.
+window.__qaContrastAudit = (maxIssues = 8) => {
+  const issues = [];
+  const seen = new Set();
+
+  const parse = value => {
+    if (!value) return null;
+    const m = value.match(/rgba?\\(([^)]+)\\)/);
+    if (!m) return null;
+    const p = m[1].split(/[,\\/\\s]+/).filter(Boolean).map(Number);
+    if (p.length < 3 || p.some(Number.isNaN)) return null;
+    return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+  };
+
+  // source-over: compõe fg por cima de bg
+  const over = (fg, bg) => {
+    const a = fg.a + bg.a * (1 - fg.a);
+    if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+    return {
+      r: (fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a,
+      g: (fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a,
+      b: (fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a,
+      a
+    };
+  };
+
+  const luminance = c => {
+    const f = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+  };
+
+  const ratio = (a, b) => {
+    const l1 = luminance(a);
+    const l2 = luminance(b);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  };
+
+  // Camadas de fundo do elemento até <html>, compostas de baixo para cima.
+  const backgroundOf = el => {
+    const layers = [];
+    let hasImage = false;
+    let node = el;
+    while (node) {
+      const style = getComputedStyle(node);
+      if (style.backgroundImage !== 'none') hasImage = true;
+      const bg = parse(style.backgroundColor);
+      if (bg && bg.a > 0) layers.push(bg);
+      node = node.parentElement;
+    }
+    layers.push({ r: 255, g: 255, b: 255, a: 1 });
+    let result = layers[layers.length - 1];
+    for (let i = layers.length - 2; i >= 0; i--) result = over(layers[i], result);
+    return { color: result, hasImage };
+  };
+
+  const describe = el => {
+    const cls = (typeof el.className === 'string' ? el.className : '').split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+    return el.tagName.toLowerCase() + (cls ? '.' + cls : '');
+  };
+
+  const candidates = Array.from(document.querySelectorAll('body *')).filter(el => {
+    if (!Array.from(el.childNodes).some(n => n.nodeType === 3 && n.textContent.trim())) return false;
+    if (el.closest('[aria-hidden="true"], [role="presentation"], [role="none"]')) return false;
+    // WCAG 1.4.3: componentes inativos não têm requisito de contraste
+    if (el.closest(':disabled, [aria-disabled="true"]')) return false;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    return true;
+  });
+
+  for (const el of candidates) {
+    if (issues.length >= maxIssues) break;
+
+    const style = getComputedStyle(el);
+    const fg = parse(style.color);
+    if (!fg || fg.a === 0) continue;
+
+    const bgInfo = backgroundOf(el);
+    // Com gradiente/imagem o fundo é indeterminado — a norma não permite avaliar.
+    if (bgInfo.hasImage) continue;
+
+    const bg = bgInfo.color;
+    const blendedFg = fg.a < 1 ? over(fg, bg) : fg;
+    const value = ratio(blendedFg, bg);
+
+    const fontSize = parseFloat(style.fontSize);
+    const weight = parseInt(style.fontWeight, 10) || 400;
+    const large = fontSize >= 24 || (fontSize >= 18.66 && weight >= 700);
+    const required = large ? 3 : 4.5;
+
+    if (value + 0.005 >= required) continue;
+
+    const text = (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 48);
+    const key = describe(el) + '|' + Math.round(value * 100) + '|' + text;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    issues.push({
+      element: describe(el),
+      text,
+      ratio: Math.round(value * 100) / 100,
+      required,
+      fontSize: Math.round(fontSize)
+    });
+  }
+
+  return issues;
+};
 `;
 
 async function gotoRoute(route) {
@@ -347,7 +461,7 @@ async function gotoRoute(route) {
   }
 
   await sleep(1800);
-  return evaluate(helpers + `(() => {
+  const data = await evaluate(helpers + `(() => {
     const main = document.querySelector('main')?.innerText || document.body.innerText;
     const controls = Array.from(document.querySelectorAll('button, [role=button], a'));
     const unlabeled = controls.filter(el => {
@@ -371,9 +485,31 @@ async function gotoRoute(route) {
         return Array.from(counts.values()).filter(count => count > 1).length;
       })(),
       replacementChars: main.includes('\\uFFFD'),
-      tabsWithoutRole: document.querySelectorAll('.ide-panel__tabs button:not([role=tab])').length
+      tabsWithoutRole: document.querySelectorAll('.ide-panel__tabs button:not([role=tab])').length,
+      // Contraste AA no tema corrente; o tema escuro é medido logo abaixo.
+      contrastIssues: window.__qaContrastAudit(16)
     };
   })()`);
+
+  // --- tema escuro: mesma troca feita pelo botão de tema --------------------
+  // A troca de data-theme invalida estilos de forma assíncrona em parte do DOM,
+  // por isso a auditoria roda em uma avaliação separada, após a espera.
+  await evaluate(`(() => {
+    window.__qaPreviousTheme = document.documentElement.getAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', 'dark');
+    return true;
+  })()`);
+  await sleep(300);
+  const darkIssues = await evaluate(helpers + `window.__qaContrastAudit(16)`);
+  await evaluate(`(() => {
+    const previous = window.__qaPreviousTheme;
+    if (previous === null) document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', previous);
+    return true;
+  })()`);
+
+  data.contrastIssues = { light: data.contrastIssues, dark: darkIssues || [] };
+  return data;
 }
 
 async function waitForText(text, timeoutMs = 8000) {
@@ -717,7 +853,11 @@ for (const route of routes) {
     const routeStart = Date.now();
     const data = await gotoRoute(route);
     routeResults.push({ route, ...data, ms: Date.now() - routeStart, consoleErrors: [...consoleErrors], pageErrors: [...pageErrors] });
-    console.error('[qa] route ' + route + ' ' + (Date.now() - routeStart) + 'ms');
+    const lightFails = data.contrastIssues?.light?.length || 0;
+    const darkFails = data.contrastIssues?.dark?.length || 0;
+    console.error('[qa] route ' + route + ' ' + (Date.now() - routeStart) + 'ms' +
+      (lightFails ? ' claro<AA:' + JSON.stringify(data.contrastIssues.light) : '') +
+      (darkFails ? ' escuro<AA:' + JSON.stringify(data.contrastIssues.dark) : ''));
     if (routeResults.length % 5 === 0) console.error('[qa] routes ' + routeResults.length + '/' + routes.length);
 
     if (data.h1 !== 1) problems.push(`${route}: esperado 1 H1, encontrado ${data.h1}.`);
@@ -725,6 +865,13 @@ for (const route of routes) {
     if (data.duplicateTableLabels > 0) problems.push(`${route}: ${data.duplicateTableLabels} nome(s) de ação repetido(s) dentro de tabelas.`);
     if (data.replacementChars) problems.push(`${route}: caractere de substituição detectado no conteúdo.`);
     if (data.tabsWithoutRole > 0) problems.push(`${route}: ${data.tabsWithoutRole} aba(s) do painel sem role="tab".`);
+    // Contraste AA é bloqueante (WCAG 2.1 SC 1.4.3) nos dois temas.
+    for (const theme of ['light', 'dark']) {
+      const themeName = theme === 'light' ? 'claro' : 'escuro';
+      for (const issue of data.contrastIssues?.[theme] || []) {
+        problems.push(`${route}: contraste AA (tema ${themeName}) — ${issue.element} "${issue.text}" ${issue.ratio}:1 (mín. ${issue.required}:1, ${issue.fontSize}px).`);
+      }
+    }
     if (consoleErrors.length) problems.push(`${route}: erro de console: ${consoleErrors[0]}`);
     if (pageErrors.length) problems.push(`${route}: pageerror: ${pageErrors[0]}`);
   } catch (error) {

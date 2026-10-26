@@ -128,9 +128,19 @@
                     else
                     {
                         <div class="ide-tree" role="tree" aria-label="Arquivos do projeto">
-                            @foreach (var node in _rootNodes)
+                            @{
+                                // paginação da raiz: um workspace pode ter milhares de entradas
+                                var visibleRoots = TreePaging.VisibleCount(_rootNodes.Count, _rootLimit);
+                            }
+                            @for (var i = 0; i < visibleRoots; i++)
                             {
-                                @RenderNode(node)
+                                @RenderNode(_rootNodes[i])
+                            }
+                            @if (TreePaging.HasMore(_rootNodes.Count, _rootLimit))
+                            {
+                                <button type="button" class="ide-tree__more" @onclick="ShowMoreRootNodesAsync">
+                                    @TreePaging.RemainingLabel(_rootNodes.Count, _rootLimit)
+                                </button>
                             }
                         </div>
                     }
@@ -304,6 +314,9 @@
         public bool IsDirectory { get; init; }
         public bool Expanded { get; set; }
         public List<Node> Children { get; } = new();
+
+        /// <summary>Limite de filhos renderizados (paginação "Mostrar mais").</summary>
+        public int RenderLimit { get; set; } = TreePaging.InitialLimit;
     }
 
     private sealed class TerminalEntry
@@ -313,6 +326,7 @@
     }
 
     private readonly List<Node> _rootNodes = new();
+    private int _rootLimit = TreePaging.InitialLimit;
     private readonly List<TabBar.EditorTab> _tabs = new();
     private readonly Dictionary<string, string> _pendingContents = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<TerminalEntry> _terminals = new();
@@ -741,6 +755,7 @@
     private async Task ReloadTreeAsync()
     {
         _rootNodes.Clear();
+        _rootLimit = TreePaging.InitialLimit;
         if (Ui.CurrentProject is null)
         {
             return;
@@ -751,6 +766,13 @@
         {
             _rootNodes.Add(new Node { Name = e.Name, Path = e.Path, IsDirectory = e.IsDirectory });
         }
+    }
+
+    /// <summary>Avança uma página dos nós raiz do Explorer.</summary>
+    private void ShowMoreRootNodesAsync()
+    {
+        _rootLimit = TreePaging.NextLimit(_rootLimit);
+        StateHasChanged();
     }
 
     private RenderFragment RenderNode(Node node) => builder =>
@@ -793,9 +815,25 @@
 
             if (node.Expanded)
             {
-                foreach (var child in node.Children)
+                // paginação: renderiza no máximo RenderLimit filhos por diretório
+                var visible = TreePaging.VisibleCount(node.Children.Count, node.RenderLimit);
+                for (var i = 0; i < visible; i++)
                 {
-                    builder.AddContent(seq++, RenderNode(child));
+                    builder.AddContent(seq++, RenderNode(node.Children[i]));
+                }
+
+                if (TreePaging.HasMore(node.Children.Count, node.RenderLimit))
+                {
+                    builder.OpenElement(seq++, "button");
+                    builder.AddAttribute(seq++, "type", "button");
+                    builder.AddAttribute(seq++, "class", "ide-tree__more");
+                    builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () =>
+                    {
+                        node.RenderLimit = TreePaging.NextLimit(node.RenderLimit);
+                        StateHasChanged();
+                    }));
+                    builder.AddContent(seq++, TreePaging.RemainingLabel(node.Children.Count, node.RenderLimit));
+                    builder.CloseElement();
                 }
             }
         }

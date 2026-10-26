@@ -468,6 +468,26 @@
   font-weight: 600;
 }
 
+/* paginação da árvore: "Mostrar mais" em diretórios com muitas entradas */
+.ide-tree__more {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 6px 4px 18px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-primary, rgb(99 102 241));
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ide-tree__more:hover {
+  background: var(--ide-active-bg);
+}
+
 .ide-tree__chevron,
 .ide-tree__folder,
 .ide-tree__fileicon {
@@ -2431,7 +2451,7 @@ body.ide-resizing {
 }
 
 .ide-cns__note-icon {
-  color: var(--color-warning, rgb(245 158 11));
+  color: var(--color-warning-text, rgb(120 53 15));
   margin-top: 2px;
 }
 
