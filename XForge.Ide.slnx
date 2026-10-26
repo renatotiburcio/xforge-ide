@@ -9,5 +9,8 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/XForge.Ide.Core.Tests/XForge.Ide.Core.Tests.csproj" />
+    <Project Path="tests/XForge.Ide.Server.Tests/XForge.Ide.Server.Tests.csproj" />
+    <Project Path="tests/XForge.Ide.Ui.Tests/XForge.Ide.Ui.Tests.csproj" />
+    <Project Path="tests/XForge.Ide.E2E.Tests/XForge.Ide.E2E.Tests.csproj" />
   </Folder>
 </Solution>

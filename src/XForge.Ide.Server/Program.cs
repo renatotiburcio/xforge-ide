@@ -92,3 +92,11 @@ var terminalManager = app.Services.GetRequiredService<XForge.Ide.Server.Services
 app.Lifetime.ApplicationStopping.Register(() => terminalManager.DisposeAllAsync().GetAwaiter().GetResult());
 
 app.Run();
+
+/// <summary>
+/// Marcador público para <see cref="Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory{TEntryPoint}"/>.
+/// O programa continua usando top-level statements.
+/// </summary>
+public partial class Program
+{
+}

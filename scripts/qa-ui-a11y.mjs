@@ -23,6 +23,12 @@ const baseUrl = process.env.IDE_URL || 'http://127.0.0.1:5600';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const profileDir = path.join(os.tmpdir(), 'xforge-qa-chrome-profile');
 
+// Diretório de solução usado pelo gate: precisa existir antes de criar o projeto
+// (ProjectService.CreateAsync recusa caminhos inexistentes).
+const projectFixtureDir = path.join(os.tmpdir(), 'xforge-qa-gate-project');
+fs.rmSync(projectFixtureDir, { recursive: true, force: true });
+fs.mkdirSync(projectFixtureDir, { recursive: true });
+
 const routes = [
   '/', '/home', '/projects', '/models', '/data', '/data/import', '/data/er',
   '/data/migrations', '/code', '/code/search', '/code/diff', '/run', '/run/console',
@@ -39,6 +45,12 @@ const interactions = [
     route: '/projects',
     name: 'Prepara projeto aberto para os testes de dados',
     ensureProject: true,
+    steps: []
+  },
+  {
+    route: '/data',
+    name: 'Prepara dicionário de teste quando necessário',
+    ensureDictionary: true,
     steps: []
   },
   {
@@ -213,6 +225,7 @@ class CdpClient {
 
 const browserPath = findBrowserPath();
 const debugPort = await getFreePort();
+console.error('[qa] browser=' + browserPath + ' port=' + debugPort);
 fs.rmSync(profileDir, { recursive: true, force: true });
 fs.mkdirSync(profileDir, { recursive: true });
 
@@ -303,6 +316,13 @@ window.__qaClick = (selector) => {
 };
 window.__qaClickText = (text) => {
   const element = Array.from(document.querySelectorAll('button, a')).find(el => (el.textContent || '').trim() === text);
+  if (!element) return false;
+  element.click();
+  return true;
+};
+window.__qaClickLabel = (label) => {
+  const element = Array.from(document.querySelectorAll('button, a, [role="treeitem"], [role="tab"]'))
+    .find(el => (el.getAttribute('aria-label') || el.getAttribute('title') || '').trim() === label);
   if (!element) return false;
   element.click();
   return true;
@@ -404,6 +424,26 @@ async function setInput(selector, value) {
   return ok;
 }
 
+/// Preenche um input localizando-o pelo atributo placeholder.
+/// Evita seletores CSS com placeholder: caminhos do Windows contêm "\",
+/// que é caractere de escape dentro de um attribute selector.
+async function setInputByPlaceholder(placeholder, value) {
+  const ok = await evaluate(`(() => {
+    const el = Array.from(document.querySelectorAll('input'))
+      .find(i => (i.getAttribute('placeholder') || '') === ${JSON.stringify(placeholder)});
+    if (!el) return false;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(el, ${JSON.stringify(value)});
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.focus();
+    el.blur();
+    return el.value;
+  })()`);
+  if (ok !== false) await sleep(250);
+  return typeof ok === 'string' && ok.length > 0;
+}
+
 async function clickPoint(x, y) {
   await cdp.send('Input.dispatchMouseEvent', {
     type: 'mouseMoved', x, y, button: 'none'
@@ -450,9 +490,110 @@ async function debugPageText() {
   }
 }
 
+async function ensureDictionaryFixture(interaction, problems) {
+  console.error('[qa] ensureDictionary check');
+  const hasDictionary = await evaluate(`!!document.querySelector('button[aria-label^="Excluir dicionário "]')`);
+  console.error('[qa] ensureDictionary hasDictionary=' + hasDictionary);
+
+  if (!hasDictionary) {
+    const opened = await clickText('Novo dicionário');
+    if (!opened) {
+      problems.push(`${interaction.name}: não foi possível abrir o modal de novo dicionário. Página: ${await debugPageText()}`);
+      return;
+    }
+
+    const waited = await waitForText('Criar dicionário');
+    if (!waited) {
+      problems.push(`${interaction.name}: modal de novo dicionário não apareceu.`);
+      return;
+    }
+
+    const nameOk = await setInputByPlaceholder('Principal', 'Dicionário QA');
+    if (!nameOk) {
+      problems.push(`${interaction.name}: não foi possível preencher o nome do dicionário de teste.`);
+      return;
+    }
+
+    const created = await clickText('Criar dicionário');
+    if (!created) {
+      problems.push(`${interaction.name}: não foi possível criar o dicionário de teste.`);
+      return;
+    }
+
+    // CreateDictAsync já abre o dicionário criado (entidades ficam visíveis).
+    const ok = await waitForText('Dicionário QA');
+    if (!ok) {
+      problems.push(`${interaction.name}: dicionário de teste não apareceu. Página: ${await debugPageText()}`);
+      return;
+    }
+  }
+  else {
+    // Banco já continha dicionário: abre o primeiro para expor as entidades.
+    const opened = await clickSelector('button[aria-label^="Abrir dicionário "]');
+    if (!opened) {
+      problems.push(`${interaction.name}: não foi possível abrir o dicionário existente.`);
+      return;
+    }
+    if (!await waitForText('Entidades')) {
+      problems.push(`${interaction.name}: painel de entidades não apareceu. Página: ${await debugPageText()}`);
+      return;
+    }
+  }
+
+  // O diagrama ER só renderiza a toolbar (inclusive "Refazer layout automático")
+  // quando o dicionário tem entidades. Cria duas para exercitar também relações.
+  for (const entityName of ['Customer', 'Order']) {
+    const exists = await evaluate(`Array.from(document.querySelectorAll('button[aria-label^="Editar entidade "]'))
+      .some(b => (b.getAttribute('aria-label') || '').includes(${JSON.stringify(entityName)}))`);
+    console.error('[qa] ensureDictionary entity ' + entityName + ' exists=' + exists);
+
+    if (exists) continue;
+
+    const modalOpened = await clickText('Nova entidade');
+    if (!modalOpened) {
+      problems.push(`${interaction.name}: não foi possível abrir o modal de nova entidade. Página: ${await debugPageText()}`);
+      return;
+    }
+
+    if (!await waitForText('Criar entidade')) {
+      problems.push(`${interaction.name}: modal de nova entidade não apareceu.`);
+      return;
+    }
+
+    // Placeholder "Customer" (nome) e "Customers" (tabela, opcional).
+    if (!await setInputByPlaceholder('Customer', entityName)) {
+      problems.push(`${interaction.name}: não foi possível preencher o nome da entidade '${entityName}'.`);
+      return;
+    }
+    if (!await setInputByPlaceholder('Customers', entityName + 's')) {
+      problems.push(`${interaction.name}: não foi possível preencher a tabela da entidade '${entityName}'.`);
+      return;
+    }
+
+    const entityCreated = await clickText('Criar entidade');
+    if (!entityCreated) {
+      problems.push(`${interaction.name}: não foi possível criar a entidade '${entityName}'.`);
+      return;
+    }
+
+    const entityVisible = await waitForText(entityName);
+    if (!entityVisible) {
+      problems.push(`${interaction.name}: entidade '${entityName}' não apareceu. Página: ${await debugPageText()}`);
+      return;
+    }
+  }
+}
+
 async function runInteraction(interaction, problems) {
+  if (interaction.ensureDictionary) {
+    await ensureDictionaryFixture(interaction, problems);
+    return;
+  }
+
   if (interaction.ensureProject) {
+    console.error('[qa] ensureProject check');
     const hasProject = await evaluate(`!!document.querySelector('button[aria-label^="Abrir "]')`);
+    console.error('[qa] ensureProject hasProject=' + hasProject);
     if (!hasProject) {
       const opened = await clickText('Novo projeto');
       if (!opened) {
@@ -466,8 +607,9 @@ async function runInteraction(interaction, problems) {
         return;
       }
 
-      const nameOk = await setInput('input[placeholder="Meu Sistema"]', 'Projeto QA Gate');
-      const pathOk = await setInput('input[placeholder="E:\\Projetos\\MeuSistema"]', 'C:\\\\Temp\\\\XForgeQaGate');
+      const nameOk = await setInputByPlaceholder('Meu Sistema', 'Projeto QA Gate');
+      // O placeholder do diretório é "E:\Projetos\MeuSistema" (com barra invertida).
+      const pathOk = await setInputByPlaceholder('E:\\Projetos\\MeuSistema', projectFixtureDir);
       if (!nameOk || !pathOk) {
         problems.push(`${interaction.name}: não foi possível preencher nome/caminho do projeto de teste.`);
         return;
@@ -568,10 +710,15 @@ async function runInteraction(interaction, problems) {
 const problems = [];
 const routeResults = [];
 
+console.error('[qa] starting gate for ' + routes.length + ' routes');
+
 for (const route of routes) {
   try {
+    const routeStart = Date.now();
     const data = await gotoRoute(route);
-    routeResults.push({ route, ...data, consoleErrors: [...consoleErrors], pageErrors: [...pageErrors] });
+    routeResults.push({ route, ...data, ms: Date.now() - routeStart, consoleErrors: [...consoleErrors], pageErrors: [...pageErrors] });
+    console.error('[qa] route ' + route + ' ' + (Date.now() - routeStart) + 'ms');
+    if (routeResults.length % 5 === 0) console.error('[qa] routes ' + routeResults.length + '/' + routes.length);
 
     if (data.h1 !== 1) problems.push(`${route}: esperado 1 H1, encontrado ${data.h1}.`);
     if (data.unlabeledControls > 0) problems.push(`${route}: ${data.unlabeledControls} controle(s) sem nome acessível.`);
@@ -590,8 +737,10 @@ const interactionResults = [];
 for (const interaction of interactions) {
   const before = problems.length;
   try {
+    console.error('[qa] interaction ' + interaction.name);
     await gotoRoute(interaction.route);
     await runInteraction(interaction, problems);
+    console.error('[qa] interaction done ' + interaction.name);
     if (consoleErrors.length) {
       problems.push(`${interaction.route}: erro de console durante "${interaction.name}": ${consoleErrors[0]}`);
     }

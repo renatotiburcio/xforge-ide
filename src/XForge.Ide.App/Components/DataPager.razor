@@ -15,7 +15,7 @@
                       Color="XFButtonColor.Secondary"
                       Size="XFExtendedSize.Sm"
                       Disabled="@(Page <= 1)"
-                      aria-label="Página anterior"
+                      AriaLabel="Página anterior"
                       OnClick="() => GoToAsync(Page - 1)" />
 
             <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Secondary"
@@ -28,7 +28,7 @@
                       Color="XFButtonColor.Secondary"
                       Size="XFExtendedSize.Sm"
                       Disabled="@(Page >= TotalPages)"
-                      aria-label="Próxima página"
+                      AriaLabel="Próxima página"
                       OnClick="() => GoToAsync(Page + 1)" />
         </div>
     </div>
