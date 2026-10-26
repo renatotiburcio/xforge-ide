@@ -1,0 +1,564 @@
+@using XForge.Ide.Application.Dto
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Services
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.DataDisplay
+@using XForge.DesignSystem.Components.Icon
+@inject DictionaryService Dictionaries
+
+@*
+    Workspace do dicionário (≈ DCT Explorer do Clarion): três regiões em uma tela.
+    Explorer (árvore) | Quick View (colunas) | Property Sheet (propriedades da
+    coluna selecionada). Sem navegação de página; seleção e edição no lugar.
+*@
+<div class="ide-dict" role="group" aria-label="Dicionário de dados">
+
+    @* -------------------------------------------------------------- Explorer *@
+    <aside class="ide-dict__explorer" aria-label="Explorer do dicionário">
+        <div class="ide-dict__explorer-head">
+            <XFTypography Variant="XFTypographyVariant.Overline" Weight="XFTypographyWeight.Semibold" Color="XFTypographyColor.Muted">
+                Tabelas
+            </XFTypography>
+            <XFButton Text="Nova" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                      AriaLabel="Nova entidade no dicionário" OnClick="OnNewEntityAsync" />
+        </div>
+
+        <div class="ide-dict__tree" role="tree" aria-label="Tabelas do dicionário">
+            @foreach (var e in Entities)
+            {
+                var selected = _currentEntity?.Id == e.Id;
+                <button class="ide-dict__node @(selected ? "ide-dict__node--active" : null)"
+                        role="treeitem" aria-selected="@(selected ? "true" : "false")"
+                        aria-label="@($"Tabela {e.Name} com {e.Fields.Count} campo(s)")"
+                        @onclick="() => SelectEntityAsync(e)">
+                    <span class="ide-dict__node-icon">@((MarkupString)XFSvgIcons.Get("folder"))</span>
+                    <span class="ide-dict__node-name">@e.Name</span>
+                    <span class="ide-dict__node-meta">@e.Fields.Count</span>
+                </button>
+            }
+        </div>
+    </aside>
+
+    @* ------------------------------------------------------------ Quick View *@
+    <section class="ide-dict__quick" aria-label="Colunas da tabela">
+        @if (_currentEntity is null)
+        {
+            <div class="ide-dict__placeholder">
+                <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                    Selecione uma tabela no Explorer para ver e editar suas colunas.
+                </XFTypography>
+            </div>
+        }
+        else
+        {
+            <div class="ide-dict__quick-head">
+                <div>
+                    <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                        @_currentEntity.Name
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                        @(_currentEntity.TableName) · @_currentEntity.Fields.Count colunas
+                    </XFTypography>
+                </div>
+                <XFButton Text="Adicionar coluna" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                          OnClick="OnAddFieldAsync" />
+            </div>
+
+            @if (_message is not null)
+            {
+                <div role="status" aria-live="polite"
+                     class="ide-dict__status @(_error ? "ide-dict__status--error" : null)">@_message</div>
+            }
+
+            <div class="ide-dict__list" role="listbox" aria-label="Colunas de @_currentEntity.Name">
+                @foreach (var f in _currentEntity.Fields)
+                {
+                    var isSelected = _selectedFieldId == f.Id;
+                    <div class="ide-dict__row @(isSelected ? "ide-dict__row--active" : null)" role="option"
+                         aria-selected="@(isSelected ? "true" : "false")"
+                         @onclick="() => SelectFieldAsync(f)">
+                        <span class="ide-dict__row-name">@f.Name</span>
+                        <span class="ide-dict__row-type">@f.ClrType@(f.Length is not null ? "(" + f.Length + ")" : "")</span>
+                        <span class="ide-dict__row-picture">@(f.Picture ?? "—")</span>
+                        @if (f.Required)
+                        {
+                            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Success" Text="obrig" />
+                        }
+                        <span class="ide-dict__row-label">@(f.Label ?? "—")</span>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    @* --------------------------------------------------------- Property Sheet *@
+    <section class="ide-dict__props" aria-label="Propriedades da coluna">
+        @if (_draft is null)
+        {
+            <div class="ide-dict__placeholder">
+                <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                    Selecione uma coluna para editar suas propriedades.
+                </XFTypography>
+            </div>
+        }
+        else
+        {
+            var draft = _draft;
+            <div class="ide-dict__props-head">
+                <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                    @draft.Name
+                </XFTypography>
+                @if (FieldRules.IsSystemField(draft.Name))
+                {
+                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="automático" />
+                }
+            </div>
+
+            <div class="ide-dict__tabs" role="tablist" aria-label="Propriedades da coluna">
+                <button role="tab" id="ide-dict-tab-general" aria-selected="true" aria-controls="ide-dict-panel-general"
+                        class="ide-dict__tab ide-dict__tab--active" @onclick="() => _tab = 0">Geral</button>
+                <button role="tab" id="ide-dict-tab-picture" aria-selected="@(_tab == 1 ? "true" : "false")" aria-controls="ide-dict-panel-picture"
+                        class="ide-dict__tab @(_tab == 1 ? "ide-dict__tab--active" : null)" @onclick="() => _tab = 1">Picture</button>
+                <button role="tab" id="ide-dict-tab-advanced" aria-selected="@(_tab == 2 ? "true" : "false")" aria-controls="ide-dict-panel-advanced"
+                        class="ide-dict__tab @(_tab == 2 ? "ide-dict__tab--active" : null)" @onclick="() => _tab = 2">Avançado</button>
+            </div>
+
+            @* ------------------------------------------------------------- Geral *@
+            @if (_tab == 0)
+            {
+                <div class="ide-dict__panel" role="tabpanel" id="ide-dict-panel-general" aria-labelledby="ide-dict-tab-general">
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-name">Nome da coluna</label>
+                        <input id="ide-dict-name" class="ide-dict__input" value="@draft.Name" disabled="@_isSystemField"
+                               @oninput="e => OnNameInputAsync(e)" />
+                        @if (_errors.Name is not null)
+                        {
+                            <span class="ide-dict__error" role="alert">@_errors.Name</span>
+                        }
+                    </div>
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-label">Rótulo (prompt)</label>
+                        <input id="ide-dict-label" class="ide-dict__input" value="@draft.Label"
+                               @oninput="e => OnDraftChangedAsync(f => f with { Label = e.Value?.ToString() })" />
+                    </div>
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-clrtype">Tipo</label>
+                        <select id="ide-dict-clrtype" class="ide-dict__input" value="@draft.ClrType"
+                                @onchange="e => OnDraftChangedAsync(f => f with { ClrType = e.Value?.ToString() ?? f.ClrType })">
+                            @foreach (var t in FieldRules.ClrTypes)
+                            {
+                                <option value="@t" selected="@(t == draft.ClrType)">@t</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="ide-dict__field ide-dict__field--inline">
+                        <label for="ide-dict-length">Caracteres</label>
+                        <input id="ide-dict-length" class="ide-dict__input ide-dict__input--num" inputmode="numeric"
+                               value="@(draft.Length?.ToString() ?? string.Empty)" disabled="@(!FieldRules.TypeAcceptsLength(draft.ClrType))"
+                               @oninput="e => OnDraftChangedAsync(f => f with { Length = FieldRules.ParseOptionalInt(e.Value?.ToString()) })" />
+                        @if (_errors.Length is not null)
+                        {
+                            <span class="ide-dict__error" role="alert">@_errors.Length</span>
+                        }
+                    </div>
+                    <div class="ide-dict__field ide-dict__field--inline">
+                        <label for="ide-dict-required">Obrigatório</label>
+                        <input id="ide-dict-required" type="checkbox" checked="@draft.Required"
+                               @onchange="e => OnDraftChangedAsync(f => f with { Required = (bool)(e.Value ?? false) })" />
+                    </div>
+                </div>
+            }
+
+            @* ----------------------------------------------------------- Picture *@
+            @if (_tab == 1)
+            {
+                <div class="ide-dict__panel" role="tabpanel" id="ide-dict-panel-picture" aria-labelledby="ide-dict-tab-picture">
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-picture">Picture (armazenamento/exibição)</label>
+                        <input id="ide-dict-picture" class="ide-dict__input" placeholder="@@s50" value="@draft.Picture"
+                               @oninput="e => OnDraftChangedAsync(f => f with { Picture = e.Value?.ToString() })" />
+                        @if (_errors.Picture is not null)
+                        {
+                            <span class="ide-dict__error" role="alert">@_errors.Picture</span>
+                        }
+                        <span class="ide-dict__hint">
+                            Formato Clarion: <b>@@s40</b> texto, <b>@@n07</b> número, <b>@@p(###) ####</b> padrão.
+                            O picture define a máscara nas telas geradas.
+                        </span>
+                    </div>
+                </div>
+            }
+
+            @* --------------------------------------------------------- Avançado *@
+            @if (_tab == 2)
+            {
+                <div class="ide-dict__panel" role="tabpanel" id="ide-dict-panel-advanced" aria-labelledby="ide-dict-tab-advanced">
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-external">Nome externo (SQL)</label>
+                        <input id="ide-dict-external" class="ide-dict__input" placeholder="@(draft.Name)"
+                               value="@draft.ExternalName"
+                               @oninput="e => OnDraftChangedAsync(f => f with { ExternalName = e.Value?.ToString() })" />
+                        <span class="ide-dict__hint">Nome físico da coluna no banco, quando diferente do nome C#.</span>
+                    </div>
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-dbtype">Tipo no banco</label>
+                        <input id="ide-dict-dbtype" class="ide-dict__input" value="@draft.DbType"
+                               @oninput="e => OnDraftChangedAsync(f => f with { DbType = e.Value?.ToString() ?? f.DbType })" />
+                        <span class="ide-dict__hint">
+                            Sugestão para @draft.ClrType: <b>@FieldRules.SuggestDbType(draft.ClrType)</b>.
+                        </span>
+                    </div>
+                    <div class="ide-dict__field ide-dict__field--inline">
+                        <label for="ide-dict-precision">Precisão (decimais)</label>
+                        <input id="ide-dict-precision" class="ide-dict__input ide-dict__input--num" inputmode="numeric"
+                               value="@(draft.Precision?.ToString() ?? string.Empty)" disabled="@(!FieldRules.TypeAcceptsPrecision(draft.ClrType))"
+                               @oninput="e => OnDraftChangedAsync(f => f with { Precision = FieldRules.ParseOptionalInt(e.Value?.ToString()) })" />
+                        @if (_errors.Precision is not null)
+                        {
+                            <span class="ide-dict__error" role="alert">@_errors.Precision</span>
+                        }
+                    </div>
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-default">Valor padrão</label>
+                        <input id="ide-dict-default" class="ide-dict__input" value="@draft.Default"
+                               @oninput="e => OnDraftChangedAsync(f => f with { Default = e.Value?.ToString() })" />
+                    </div>
+                </div>
+            }
+
+            <div class="ide-dict__actions">
+                <XFButton Text="Aplicar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                          OnClick="ApplyAsync" />
+                <XFButton Text="Descartar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                          OnClick="DiscardAsync" />
+                @if (!FieldRules.IsSystemField(draft.Name))
+                {
+                    <XFButton Text="Excluir coluna" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                              AriaLabel="@($"Excluir coluna {draft.Name}")" OnClick="AskDeleteFieldAsync" />
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@* ================================================ Modal: adicionar coluna *@
+<Modal Open="@_showFieldModal" OpenChanged="OnFieldModalChanged"
+       Title="Adicionar coluna" Description="O tipo no banco é sugerido a partir do tipo C#."
+       ConfirmText="Adicionar" ConfirmAction="AddFieldAsync">
+    <div class="grid gap-4 md:grid-cols-2">
+        <XFTextInput Label="Nome *" Placeholder="Descricao"
+                     Value="@_newName" ValueChanged="(string v) => _newName = v ?? string.Empty" />
+        <XFCombobox TItem="string" TValue="string" Label="Tipo *" Placeholder="Selecione"
+                    Items="@FieldRules.ClrTypes" TextSelector="@(t => t)" ValueSelector="@(t => t)"
+                    Value="@_newClrType" ValueChanged='(string? v) => _newClrType = v ?? "string"' />
+        <XFTextInput Label="Rótulo (opcional)" Placeholder="Descrição"
+                     Value="@_newLabel" ValueChanged="(string v) => _newLabel = v" />
+        <XFTextInput Label="Picture (opcional)" Placeholder="@@s50"
+                     Value="@_newPicture" ValueChanged="(string v) => _newPicture = v" />
+        <XFCheckbox Label="Obrigatório" Value="@_newRequired" ValueChanged="(bool? v) => _newRequired = v ?? false" />
+    </div>
+    @if (_modalError is not null)
+    {
+        <div role="alert" class="ide-dict__status ide-dict__status--error">@_modalError</div>
+    }
+</Modal>
+
+@* ============================================ Modal: confirmar exclusão *@
+<ConfirmDialog Open="@_showDeleteConfirm" OpenChanged="OnDeleteConfirmChanged"
+               Title="Excluir coluna"
+               ConfirmMessage="A coluna será removida da tabela."
+               TargetName="@_deleteTargetName"
+               ConfirmText="Excluir"
+               OnConfirm="DeleteFieldConfirmedAsync" />
+
+@code {
+    /// <summary>Entidade dona do workspace (recarregada pelo pai após mutações).</summary>
+    [Parameter, EditorRequired] public EntityDto Entity { get; set; } = default!;
+
+    /// <summary>Notifica a página pai para recarregar a entidade após mutações.</summary>
+    [Parameter] public Func<Task>? Changed { get; set; }
+
+    /// <summary>Disparado quando o usuário clica uma tabela no Explorer.</summary>
+    [Parameter] public EventCallback<EntityDto> EntitySelected { get; set; }
+
+    /// <summary>Texto do botão "Nova" do Explorer (ação do pai).</summary>
+    [Parameter] public EventCallback OnNewEntity { get; set; }
+
+    /// <summary>Resumo das tabelas do dicionário (para o Explorer).</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<EntityDto> Entities { get; set; } = Array.Empty<EntityDto>();
+
+    private EntityDto? _currentEntity;
+    private EntityFieldDto? _draft;
+    private EntityFieldDto? _persisted;
+    private Guid? _selectedFieldId;
+    private int _tab;
+    private string? _message;
+    private bool _error;
+
+    private FieldErrors _errors = new();
+
+    private bool _isSystemField => _draft is not null && FieldRules.IsSystemField(_draft.Name);
+
+    // rascunho de nova coluna
+    private bool _showFieldModal;
+    private string _newName = string.Empty;
+    private string _newClrType = "string";
+    private string? _newLabel;
+    private string? _newPicture;
+    private bool _newRequired;
+    private string? _modalError;
+
+    // confirmação de exclusão
+    private bool _showDeleteConfirm;
+    private string? _deleteTargetName;
+    private Guid? _deleteFieldId;
+
+    private sealed record FieldErrors(
+        string? Name = null,
+        string? Length = null,
+        string? Precision = null,
+        string? Picture = null)
+    {
+        public bool Any => Name is not null || Length is not null || Precision is not null || Picture is not null;
+    }
+
+    protected override void OnParametersSet()
+    {
+        // adota a entidade quando o pai trouxer uma nova (seleção ou reload)
+        if (!ReferenceEquals(Entity, _currentEntity))
+        {
+            _currentEntity = Entity;
+            _draft = null;
+            _persisted = null;
+            _selectedFieldId = null;
+        }
+    }
+
+    private async Task SelectEntityAsync(EntityDto entity)
+    {
+        _currentEntity = entity;
+        _draft = null;
+        _persisted = null;
+        _selectedFieldId = null;
+        await EntitySelected.InvokeAsync(entity);
+    }
+
+    private Task OnNewEntityAsync() => OnNewEntity.InvokeAsync();
+
+    private Task SelectFieldAsync(EntityFieldDto f)
+    {
+        _selectedFieldId = f.Id;
+        _draft = f;
+        _persisted = f;
+        _errors = new FieldErrors();
+        _tab = 0;
+        _message = null;
+        _error = false;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OnDraftChangedAsync(Func<EntityFieldDto, EntityFieldDto> change)
+    {
+        if (_draft is not null)
+        {
+            _draft = change(_draft);
+        }
+        return Task.CompletedTask;
+    }
+
+    private Task OnNameInputAsync(ChangeEventArgs e)
+    {
+        _draft = _draft with { Name = e.Value?.ToString() ?? string.Empty };
+        _errors = _errors with { Name = null };
+        return Task.CompletedTask;
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (_draft is null || _persisted is null || _currentEntity is null)
+        {
+            return;
+        }
+        var draft = _draft;
+        var siblings = _currentEntity.Fields.Where(f => f.Id != draft.Id).Select(f => f.Name);
+
+        var nameError = FieldRules.ValidateName(draft.Name, siblings, _persisted.Name);
+        var lengthError = FieldRules.ValidateLength(draft.Length?.ToString(), draft.ClrType);
+        var precisionError = FieldRules.ValidatePrecision(draft.Precision?.ToString(), draft.ClrType);
+        var pictureError = FieldRules.ValidatePicture(draft.Picture);
+        _errors = new FieldErrors(nameError, lengthError, precisionError, pictureError);
+        if (_errors.Any)
+        {
+            _message = "Corrija os campos destacados.";
+            _error = true;
+            StateHasChanged();
+            return;
+        }
+
+        var result = await Dictionaries.UpdateFieldAsync(new(
+            draft.Id, draft.Name, draft.ClrType, draft.DbType, draft.Length, draft.Precision,
+            draft.Required, draft.Default, draft.Picture, draft.Label, draft.ExternalName));
+
+        if (result.IsSuccess)
+        {
+            _persisted = result.Value;
+            _draft = result.Value;
+            _message = $"Coluna '{result.Value.Name}' atualizada.";
+            _error = false;
+            await ReloadAsync();
+        }
+        else
+        {
+            _message = result.Error;
+            _error = true;
+        }
+        StateHasChanged();
+    }
+
+    private Task DiscardAsync()
+    {
+        if (_persisted is not null)
+        {
+            _draft = _persisted;
+        }
+        _errors = new FieldErrors();
+        _message = null;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OnAddFieldAsync()
+    {
+        _newName = string.Empty;
+        _newClrType = "string";
+        _newLabel = null;
+        _newPicture = null;
+        _newRequired = false;
+        _modalError = null;
+        _showFieldModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnFieldModalChanged(bool open)
+    {
+        _showFieldModal = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task AddFieldAsync()
+    {
+        if (_currentEntity is null)
+        {
+            return;
+        }
+        var name = FieldRules.NormalizeName(_newName);
+        var nameError = FieldRules.ValidateName(name, _currentEntity.Fields.Select(f => f.Name));
+        if (nameError is not null)
+        {
+            _modalError = nameError;
+            return;
+        }
+        var pictureError = FieldRules.ValidatePicture(_newPicture);
+        if (pictureError is not null)
+        {
+            _modalError = pictureError;
+            return;
+        }
+
+        var dbType = FieldRules.SuggestDbType(_newClrType);
+        var result = await Dictionaries.AddFieldAsync(new(
+            _currentEntity.Id, name, _newClrType, dbType,
+            FieldRules.TypeAcceptsLength(_newClrType) ? FieldRules.DefaultStringLength : null,
+            null, _newRequired, null, _newPicture, _newLabel, null));
+
+        if (result.IsSuccess)
+        {
+            _showFieldModal = false;
+            _modalError = null;
+            _message = $"Coluna '{result.Value.Name}' adicionada.";
+            _error = false;
+            await ReloadAsync();
+            await SelectFieldAsync(result.Value);
+        }
+        else
+        {
+            _modalError = result.Error;
+        }
+        StateHasChanged();
+    }
+
+    private Task AskDeleteFieldAsync()
+    {
+        if (_draft is null)
+        {
+            return Task.CompletedTask;
+        }
+        _deleteFieldId = _draft.Id;
+        _deleteTargetName = _draft.Name;
+        _showDeleteConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnDeleteConfirmChanged(bool open)
+    {
+        _showDeleteConfirm = open;
+        if (!open)
+        {
+            _deleteFieldId = null;
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task DeleteFieldConfirmedAsync()
+    {
+        if (_deleteFieldId is null)
+        {
+            return;
+        }
+        await Dictionaries.DeleteFieldAsync(_deleteFieldId.Value);
+        _deleteFieldId = null;
+        _showDeleteConfirm = false;
+        _draft = null;
+        _persisted = null;
+        _selectedFieldId = null;
+        _message = "Coluna excluída.";
+        _error = false;
+        await ReloadAsync();
+        StateHasChanged();
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (_currentEntity is null)
+        {
+            return;
+        }
+        var fresh = await Dictionaries.GetEntityAsync(_currentEntity.Id);
+        if (fresh is not null)
+        {
+            _currentEntity = fresh;
+            Entity = fresh;
+            if (_selectedFieldId is Guid id)
+            {
+                var updated = fresh.Fields.FirstOrDefault(f => f.Id == id);
+                if (updated is not null)
+                {
+                    _draft = updated;
+                    _persisted = updated;
+                }
+                else
+                {
+                    _draft = null;
+                    _persisted = null;
+                    _selectedFieldId = null;
+                }
+            }
+        }
+        if (Changed is not null)
+        {
+            await Changed.Invoke();
+        }
+    }
+}

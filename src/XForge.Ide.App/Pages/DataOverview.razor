@@ -96,42 +96,21 @@
                         </XFTypography>
                         <XFButton Text="Nova entidade" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
                                   OnClick="OpenEntityModalAsync" />
+                        @if (_currentEntity is not null)
+                        {
+                            <XFButton Text="Propriedades" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                                      AriaLabel="@($"Propriedades da entidade {_currentEntity.Name}")"
+                                      OnClick="OpenEntityPropsModalAsync" />
+                            <XFButton Text="Excluir" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                                      AriaLabel="@($"Excluir entidade {_currentEntity.Name}")"
+                                      OnClick="() => AskDeleteEntityAsync(_currentEntity)" />
+                        }
                     </XFStack>
 
-                    @if (_entities.Count > 0)
-                    {
-                        <XFTable Striped="true" Hoverable="true" Compact="true" Class="mt-3">
-                            <XFTableHeader>
-                                <XFTableRow>
-                                    <XFTableCell Header="true">Entidade</XFTableCell>
-                                    <XFTableCell Header="true">Tabela</XFTableCell>
-                                    <XFTableCell Header="true">Campos</XFTableCell>
-                                    <XFTableCell Header="true">Ações</XFTableCell>
-                                </XFTableRow>
-                            </XFTableHeader>
-                            <XFTableBody>
-                                @foreach (var e in VisibleEntities)
-                                {
-                                    <XFTableRow>
-                                        <XFTableCell>@e.Name</XFTableCell>
-                                        <XFTableCell><span class="text-text-muted text-sm">@e.TableName</span></XFTableCell>
-                                        <XFTableCell>@e.Fields.Count</XFTableCell>
-                                        <XFTableCell>
-                                            <div class="flex gap-2">
-                                                <XFButton Text="Editar" AriaLabel="@($"Editar entidade {e.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
-                                                          OnClick="() => OpenEntityAsync(e)" />
-                                                <XFButton Text="Excluir" AriaLabel="@($"Excluir entidade {e.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
-                                                          OnClick="() => AskDeleteEntityAsync(e)" />
-                                            </div>
-                                        </XFTableCell>
-                                    </XFTableRow>
-                                }
-                            </XFTableBody>
-                        </XFTable>
-
-                        <DataPager TotalItems="_entities.Count" Page="_entityPage" PageSize="PageSize"
-                                   PageChanged="OnEntityPageChanged" />
-                    }
+                    <DictionaryWorkspace Entities="_entities" Entity="@_currentEntity"
+                                         EntitySelected="OnEntitySelectedAsync"
+                                         OnNewEntity="OpenEntityModalAsync"
+                                         Changed="OnEntityChangedAsync" />
                 </ChildContent>
             </XFCard>
         }
@@ -195,11 +174,6 @@
             </XFCard>
         }
 
-        @* ------------------------------------------------------- Editor de entidade *@
-        @if (_currentEntity is not null)
-        {
-            <EntityEditor Entity="@_currentEntity" Changed="OnEntityChangedAsync" />
-        }
     }
 </XFStack>
 
@@ -240,6 +214,22 @@
     </div>
 </Modal>
 
+@* ================================================== Modal: propriedades da entidade *@
+<Modal Open="@_showPropsModal" OpenChanged="OnEntityPropsModalChanged"
+       Title="Propriedades da entidade" Description="Nome, tabela física e prefixo (≈ Table Properties do Clarion)."
+       ConfirmText="Salvar" ConfirmAction="SaveEntityPropsAsync">
+    <div class="grid gap-4 md:grid-cols-2">
+        <XFTextInput Label="Nome da entidade *" Placeholder="Customer"
+                     Value="@_propsName" ValueChanged="(string v) => _propsName = v ?? string.Empty" />
+        <XFTextInput Label="Tabela no banco *" Placeholder="Customers"
+                     Value="@_propsTable" ValueChanged="(string v) => _propsTable = v ?? string.Empty" />
+        <XFTextInput Label="Prefixo (opcional)" Placeholder="CUS"
+                     Value="@_propsPrefix" ValueChanged="(string? v) => _propsPrefix = v" />
+        <XFTextInput Label="Nome externo SQL (opcional)" Placeholder="cus_customers"
+                     Value="@_propsExternal" ValueChanged="(string? v) => _propsExternal = v" />
+    </div>
+</Modal>
+
 @* ====================================================== Modal: confirmar exclusões *@
 <ConfirmDialog Open="@_showDeleteConfirm" OpenChanged="OnDeleteConfirmChanged"
                Title="@_deleteTitle"
@@ -255,15 +245,11 @@
     private EntityDto? _currentEntity;
     private IReadOnlyList<EntityRelationDto> _relations = Array.Empty<EntityRelationDto>();
     private int _dictionaryPage = 1;
-    private int _entityPage = 1;
     private int _relationPage = 1;
     private const int PageSize = 20;
 
     private IEnumerable<DictionaryDto> VisibleDictionaries =>
         _dictionaries.Skip((_dictionaryPage - 1) * PageSize).Take(PageSize);
-
-    private IEnumerable<EntityDto> VisibleEntities =>
-        _entities.Skip((_entityPage - 1) * PageSize).Take(PageSize);
 
     private IEnumerable<EntityRelationDto> VisibleRelations =>
         _relations.Skip((_relationPage - 1) * PageSize).Take(PageSize);
@@ -271,13 +257,6 @@
     private Task OnDictionaryPageChanged(int page)
     {
         _dictionaryPage = page;
-        StateHasChanged();
-        return Task.CompletedTask;
-    }
-
-    private Task OnEntityPageChanged(int page)
-    {
-        _entityPage = page;
         StateHasChanged();
         return Task.CompletedTask;
     }
@@ -392,6 +371,13 @@
     private string _entityTable = string.Empty;
     private string? _entityPrefix;
 
+    // Modal propriedades da entidade (≈ Table Properties)
+    private bool _showPropsModal;
+    private string _propsName = string.Empty;
+    private string _propsTable = string.Empty;
+    private string? _propsPrefix;
+    private string? _propsExternal;
+
     // Confirmação de exclusão
     private bool _showDeleteConfirm;
     private string _deleteTitle = "Confirmar exclusão";
@@ -479,7 +465,6 @@
         _currentDictionary = d;
         _currentEntity = null;
         _entities = await Dictionaries.ListEntitiesAsync(d.Id);
-        _entityPage = 1;
         await LoadRelationsAsync();
         await ReloadDictionariesAsync();
     }
@@ -522,6 +507,19 @@
             return Task.CompletedTask;
         }
 
+    private async Task ReloadEntitiesAsync()
+    {
+        if (_currentDictionary is null)
+        {
+            return;
+        }
+        _entities = await Dictionaries.ListEntitiesAsync(_currentDictionary.Id);
+        if (_currentEntity is not null)
+        {
+            _currentEntity = await Dictionaries.GetEntityAsync(_currentEntity.Id);
+        }
+    }
+
     private async Task CreateEntityAsync()
     {
         if (_currentDictionary is null) return;
@@ -539,7 +537,7 @@
         {
             _showEntityModal = false;
             _entities = await Dictionaries.ListEntitiesAsync(_currentDictionary.Id);
-            _entityPage = 1;
+            _currentEntity = await Dictionaries.GetEntityAsync(result.Value.Id);
         await LoadRelationsAsync();
         await ReloadDictionariesAsync();
             _message = $"Entidade '{result.Value.Name}' criada (com chave primária Id).";
@@ -550,9 +548,58 @@
         }
     }
 
-    private async Task OpenEntityAsync(EntityDto e)
+    private async Task OnEntitySelectedAsync(EntityDto e)
     {
         _currentEntity = await Dictionaries.GetEntityAsync(e.Id);
+        StateHasChanged();
+    }
+
+    /// <summary>Abre as propriedades da entidade selecionada (≈ Table Properties).</summary>
+    private Task OpenEntityPropsModalAsync()
+    {
+        if (_currentEntity is null)
+        {
+            return Task.CompletedTask;
+        }
+        _propsName = _currentEntity.Name;
+        _propsTable = _currentEntity.TableName;
+        _propsPrefix = _currentEntity.Prefix;
+        _propsExternal = _currentEntity.ExternalName;
+        _showPropsModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnEntityPropsModalChanged(bool open)
+    {
+        _showPropsModal = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveEntityPropsAsync()
+    {
+        if (_currentEntity is null)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_propsName) || string.IsNullOrWhiteSpace(_propsTable))
+        {
+            _message = "Informe o nome da entidade e o nome da tabela.";
+            return;
+        }
+
+        var result = await Dictionaries.UpdateEntityAsync(new(
+            _currentEntity.Id, _propsName.Trim(), _propsTable.Trim(), _currentEntity.Provider, _propsPrefix, _propsExternal));
+        if (result.IsSuccess)
+        {
+            _showPropsModal = false;
+            _message = $"Entidade '{result.Value.Name}' atualizada.";
+            await ReloadEntitiesAsync();
+        }
+        else
+        {
+            _message = result.Error;
+        }
+        StateHasChanged();
     }
 
     private Task AskDeleteEntityAsync(EntityDto e)

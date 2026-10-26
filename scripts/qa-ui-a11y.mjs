@@ -528,7 +528,7 @@ async function clickSelector(selector) {
   const box = await evaluate(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) return null;
-    el.scrollIntoView({ block: 'center', inline: 'center' });
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     const rect = el.getBoundingClientRect();
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, visible: rect.width > 0 && rect.height > 0 };
   })()`);
@@ -594,27 +594,38 @@ async function clickPoint(x, y) {
 }
 
 async function clickText(text) {
-  const box = await evaluate(`(() => {
-    const el = Array.from(document.querySelectorAll('button, a')).find(node => (node.textContent || '').trim() === ${JSON.stringify(text)});
-    if (!el) return null;
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    const rect = el.getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, visible: rect.width > 0 && rect.height > 0 };
-  })()`);
+  // Clique no proprio elemento (evento DOM genuino, tratado pela delegacao de
+  // eventos do Blazor). Clique por coordenadas via CDP e fragil aqui: entre medir
+  // o retangulo e enviar os eventos de mouse existem round-trips, e um re-render
+  // do Blazor nesse intervalo (ex.: foco retornando ao botao apos o modal fechar)
+  // move o conteudo — o clique real erraria o alvo.
+  // A detecgao de dialogo aberto permanece: clicar "atravess" de um modal e erro.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const state = await evaluate(`(() => {
+      const el = Array.from(document.querySelectorAll('button, a')).find(node => (node.textContent || '').trim() === ${JSON.stringify(text)});
+      if (!el) return { missing: true };
+      const rect = el.getBoundingClientRect();
+      const dialogoAberto = !!document.querySelector('[role="dialog"],[role="alertdialog"]');
+      const dentroDoDialogo = !!el.closest('[role="dialog"],[role="alertdialog"]');
+      return { missing: false, visible: rect.width > 0 && rect.height > 0, dialogoAberto, dentroDoDialogo };
+    })()`);
 
-  if (!box?.visible) return false;
+    if (state?.missing || !state?.visible) return false;
+    if (state.dialogoAberto && !state.dentroDoDialogo) {
+      // um modal esta cobrindo a tela: nao e hora de clicar neste botao
+      await sleep(300);
+      continue;
+    }
 
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved', x: box.x, y: box.y, button: 'none'
-  }, sessionId);
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mousePressed', x: box.x, y: box.y, button: 'left', clickCount: 1
-  }, sessionId);
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased', x: box.x, y: box.y, button: 'left', clickCount: 1
-  }, sessionId);
-  await sleep(350);
-  return true;
+    await evaluate(`(() => {
+      const el = Array.from(document.querySelectorAll('button, a')).find(node => (node.textContent || '').trim() === ${JSON.stringify(text)});
+      if (el) el.click();
+      return !!el;
+    })()`);
+    await sleep(350);
+    return true;
+  }
+  return false;
 }
 
 async function debugPageText() {
@@ -679,7 +690,7 @@ async function ensureDictionaryFixture(interaction, problems) {
   // O diagrama ER só renderiza a toolbar (inclusive "Refazer layout automático")
   // quando o dicionário tem entidades. Cria duas para exercitar também relações.
   for (const entityName of ['Customer', 'Order']) {
-    const exists = await evaluate(`Array.from(document.querySelectorAll('button[aria-label^="Editar entidade "]'))
+    const exists = await evaluate(`Array.from(document.querySelectorAll('button[aria-label^="Tabela "]'))
       .some(b => (b.getAttribute('aria-label') || '').includes(${JSON.stringify(entityName)}))`);
     console.error('[qa] ensureDictionary entity ' + entityName + ' exists=' + exists);
 
@@ -692,7 +703,7 @@ async function ensureDictionaryFixture(interaction, problems) {
     }
 
     if (!await waitForText('Criar entidade')) {
-      problems.push(`${interaction.name}: modal de nova entidade não apareceu.`);
+      problems.push(`${interaction.name}: modal de nova entidade não apareceu. Página: ${await debugPageText()}`);
       return;
     }
 
