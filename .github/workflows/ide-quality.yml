@@ -39,8 +39,11 @@ jobs:
       - name: Compilar solução
         run: dotnet build XForge.Ide.slnx -c Debug
 
-      - name: Testes unitários
-        run: dotnet test tests/XForge.Ide.Core.Tests/XForge.Ide.Core.Tests.csproj -c Debug --nologo
+      - name: Testes unitários e de integração
+        run: |
+          dotnet test tests/XForge.Ide.Core.Tests/XForge.Ide.Core.Tests.csproj -c Debug --nologo
+          dotnet test tests/XForge.Ide.Server.Tests/XForge.Ide.Server.Tests.csproj -c Debug --nologo
+          dotnet test tests/XForge.Ide.Ui.Tests/XForge.Ide.Ui.Tests.csproj -c Debug --nologo
 
       - name: Gate de UI e acessibilidade
         shell: pwsh
