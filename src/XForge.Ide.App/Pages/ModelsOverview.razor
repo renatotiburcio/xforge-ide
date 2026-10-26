@@ -1,0 +1,468 @@
+﻿@page "/models"
+@rendermode InteractiveServer
+@using XForge.DesignSystem.Components.Icon
+@inject NavigationManager Nav
+
+<PageTitle>XForge IDE — Modelos de Projeto</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+
+    @* ------------------------------------------------------------------ cabeçalho *@
+    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center" Wrap="XFWrap.Wrap">
+        <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Modelos de Projeto</XFTypography>
+        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="@($"{_templates.Length} modelos")" />
+    </XFStack>
+
+    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+        Cada modelo descreve a solution gerada: camadas, identidade, provider de banco, testes e
+        quando faz sentido usá-lo. A estrutura listada em <b>Ver estrutura</b> espelha os arquivos
+        criados pelo gerador (<code>NewAppGenerator</code>).
+    </XFTypography>
+
+    @* -------------------------------------------------------------------- busca *@
+    <XFTextInput Label="Buscar modelo" Placeholder="nome, descrição ou quando usar…" Immediate="true"
+                 Value="@_filter" ValueChanged="OnFilterChanged" Class="ide-models__search">
+        <StartIcon>
+            <span class="ide-models__search-icon">@((MarkupString)XFSvgIcons.Get("magnifying-glass"))</span>
+        </StartIcon>
+    </XFTextInput>
+
+    @* ------------------------------------------------------------------ galeria *@
+    @if (Filtered.Count == 0)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <div class="ide-models__empty">
+                    <span class="ide-models__empty-icon">@((MarkupString)XFSvgIcons.Get("magnifying-glass"))</span>
+                    <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                        Nenhum modelo encontrado para "@_filter".
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                        Tente outro termo (ex.: "api", "blazor", "identity") ou limpe a busca para ver
+                        todos os @_templates.Length modelos.
+                    </XFTypography>
+                    <XFButton Text="Limpar busca" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                              OnClick="ClearFilterAsync" />
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        <div class="ide-models__grid">
+            @foreach (var t in Filtered)
+            {
+                <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg" Class="ide-models__card">
+                    <ChildContent>
+                        @* título + badge de complexidade *@
+                        <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center"
+                                 Wrap="XFWrap.Wrap">
+                            <span class="ide-models__card-icon">@((MarkupString)XFSvgIcons.Get(t.Icon))</span>
+                            <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold"
+                                          Class="ide-models__card-title">
+                                @t.Name
+                            </XFTypography>
+                        </XFStack>
+
+                        <XFStack Orientation="XFOrientation.Horizontal" Gap="2" Wrap="XFWrap.Wrap"
+                                 Class="ide-models__badges">
+                            <XFBadge Variant="XFBadgeVariant.Soft" Color="@t.ComplexityColor" Text="@t.Complexity" />
+                            <XFBadge Variant="XFBadgeVariant.Soft"
+                                     Color="@(t.GeneratorReady ? XFBadgeColor.Success : XFBadgeColor.Neutral)"
+                                     Text="@(t.GeneratorReady ? "Gerador ativo" : "Gerador em breve")" />
+                        </XFStack>
+
+                        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary"
+                                      Class="ide-models__desc">
+                            @t.Tagline
+                        </XFTypography>
+
+                        @* o que a solution gera *@
+                        <XFTypography Variant="XFTypographyVariant.Overline" Weight="XFTypographyWeight.Semibold"
+                                      Class="ide-models__label">
+                            O que gera
+                        </XFTypography>
+                        <ul class="ide-models__list">
+                            @foreach (var item in t.Generates)
+                            {
+                                <li class="ide-models__list-item">
+                                    <span class="ide-models__check">@((MarkupString)XFSvgIcons.Get("check"))</span>
+                                    <span>@item</span>
+                                </li>
+                            }
+                        </ul>
+
+                        @* metadados: provider e quando usar *@
+                        <div class="ide-models__meta">
+                            <div class="ide-models__meta-item">
+                                <span class="ide-models__meta-icon">@((MarkupString)XFSvgIcons.Get("database"))</span>
+                                <div>
+                                    <XFTypography Variant="XFTypographyVariant.Overline"
+                                                  Color="XFTypographyColor.Muted">Provider de banco</XFTypography>
+                                    <XFTypography Variant="XFTypographyVariant.Body2">@t.Provider</XFTypography>
+                                </div>
+                            </div>
+                            <div class="ide-models__meta-item">
+                                <span class="ide-models__meta-icon">@((MarkupString)XFSvgIcons.Get("arrow-right"))</span>
+                                <div>
+                                    <XFTypography Variant="XFTypographyVariant.Overline"
+                                                  Color="XFTypographyColor.Muted">Quando usar</XFTypography>
+                                    <XFTypography Variant="XFTypographyVariant.Body2">@t.WhenToUse</XFTypography>
+                                </div>
+                            </div>
+                        </div>
+
+                        @* ações *@
+                        <div class="ide-models__actions">
+                            <XFButton Text="Usar este modelo" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                                      OnClick="() => UseTemplateAsync(t)">
+                                <StartIcon>
+                                    <span class="ide-models__btn-icon">@((MarkupString)XFSvgIcons.Get("arrow-right"))</span>
+                                </StartIcon>
+                            </XFButton>
+                            <XFButton Text="Ver estrutura" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                      OnClick="() => ShowTreeAsync(t)">
+                                <StartIcon>
+                                    <span class="ide-models__btn-icon">@((MarkupString)XFSvgIcons.Get("folder"))</span>
+                                </StartIcon>
+                            </XFButton>
+                        </div>
+                    </ChildContent>
+                </XFCard>
+            }
+        </div>
+    }
+</XFStack>
+
+@* ------------------------------------------------------ Modal: estrutura do modelo *@
+<Modal Open="@_showTreeModal" OpenChanged="OnTreeModalChanged"
+       Title="@(_treeTemplate is null ? "Estrutura" : $"Estrutura — {_treeTemplate.Name}")"
+       Description="@(_treeTemplate?.TreeNote ?? string.Empty)"
+       Size="XFOverlaySize.Lg">
+    <ChildContent>
+        @if (_treeLines.Count > 0)
+        {
+            <div class="ide-models__tree">
+                @foreach (var line in _treeLines)
+                {
+                    <div class="ide-models__tree-row" style="margin-left:@(line.Depth * 16)px">
+                        @if (line.IsFolder)
+                        {
+                            <span class="ide-models__tree-icon">@((MarkupString)XFSvgIcons.Get("folder"))</span>
+                            <span class="ide-models__tree-name ide-models__tree-name--folder">@line.Name</span>
+                        }
+                        else
+                        {
+                            <span class="ide-models__tree-name">@line.Name</span>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </ChildContent>
+    <FooterActions>
+        <XFButton Text="Fechar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                  OnClick="CloseTreeModalAsync" />
+        @if (_treeTemplate is not null)
+        {
+            <XFButton Text="Usar este modelo" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                      OnClick="() => UseTemplateAsync(_treeTemplate)">
+                <StartIcon>
+                    <span class="ide-models__btn-icon">@((MarkupString)XFSvgIcons.Get("arrow-right"))</span>
+                </StartIcon>
+            </XFButton>
+        }
+    </FooterActions>
+</Modal>
+
+@code {
+    /// <summary>Modelo de projeto exibido na galeria.</summary>
+    private sealed record TemplateInfo(
+        string Id,
+        string Name,
+        string Icon,
+        string Tagline,
+        string[] Generates,
+        string Complexity,
+        XFBadgeColor ComplexityColor,
+        string Provider,
+        string WhenToUse,
+        bool GeneratorReady,
+        string TreeNote,
+        IReadOnlyList<TreeItem> Tree);
+
+    /// <summary>Nó da árvore de pastas/arquivos gerada pelo template.</summary>
+    private sealed record TreeItem(string Name, bool IsFolder, IReadOnlyList<TreeItem> Children);
+
+    /// <summary>Linha já achatada da árvore (com profundidade para indentar).</summary>
+    private sealed record TreeLine(int Depth, string Name, bool IsFolder);
+
+    private static TreeItem Folder(string name, params TreeItem[] children)
+        => new(name, true, children);
+
+    private static TreeItem File(string name)
+        => new(name, false, Array.Empty<TreeItem>());
+
+    // Catálogo de modelos — mantido em sincronia com o array _templates de Projects.razor
+    // e com os arquivos gerados por NewAppGenerator (XForge.Ide.Templates).
+    private static readonly TemplateInfo[] _templates =
+    [
+        new(
+            "clean-architecture",
+            "Clean Architecture (API + Client)",
+            "database",
+            "Solution .NET 10 em 6 projetos, com API REST e cliente Blazor WebAssembly separados.",
+            [
+                "Domain — BaseEntity, Result e entidades de negócio puras",
+                "Application — mensagens CQRS, IRepository e DependencyInjection",
+                "Infrastructure — EF Core DbContext, Repository e DbContextFactory de design-time",
+                "Api — Program.cs com OpenAPI, health check em /api/health e controllers",
+                "Client — Blazor WebAssembly com ApiClient tipado e _Imports",
+                "Tests — projeto de testes com smoke test da solution",
+                "Identity — ASP.NET Core Identity + JWT (opcional no wizard)"
+            ],
+            "Avançado",
+            XFBadgeColor.Danger,
+            "SQLite (padrão), PostgreSQL, MySQL ou SQL Server",
+            "Sistemas de médio e grande porte, com regras de negócio que exigem teste automatizado, troca de banco e API separada do cliente.",
+            true,
+            "Estrutura exata dos arquivos gerados pelo wizard Novo aplicativo (NewAppGenerator). {{NS}} é o namespace da solution e a pasta Identity/Auth só existe quando a opção Identity + JWT está ligada.",
+            BuildCleanArchitectureTree()),
+
+        new(
+            "blazor-unificado",
+            "Blazor Unificado (Server)",
+            "table-cells",
+            "Um único projeto Blazor que fala direto com o EF Core, sem HTTP entre cliente e servidor.",
+            [
+                "Projeto Blazor único — páginas, layout, rotas e _Imports em um só lugar",
+                "Componentes de layout (MainLayout, NavMenu) e páginas iniciais",
+                "Infrastructure embutida — DbContext do EF Core e configuração do provider",
+                "Serviços de aplicação in-process (sem camada HTTP)",
+                "Identity com UI Razor Components para login e registro",
+                "Tests — smoke test de páginas e serviços"
+            ],
+            "Intermediário",
+            XFBadgeColor.Warning,
+            "SQLite (padrão), PostgreSQL, MySQL ou SQL Server",
+            "Painéis internos, CRUDs e protótipos onde a latência e o custo de uma API separada não compensam.",
+            false,
+            "Estrutura prevista para este modelo ({{NS}} é o namespace da solution). Hoje o gerador ativo é o Clean Architecture; os demais modelos já podem ser registrados no modal de novo projeto.",
+            BuildBlazorUnificadoTree()),
+
+        new(
+            "api-minima",
+            "API Mínima (endpoints enxutos)",
+            "database",
+            "Solução enxuta: Minimal API com endpoints agrupados por recurso e OpenAPI.",
+            [
+                "Api — Program.cs enxuto com Minimal APIs e MapOpenApi",
+                "Endpoints agrupados por recurso (MapGroup + tipagem forte)",
+                "Application — serviços de aplicação e validação",
+                "Infrastructure — EF Core DbContext, repositório e DependencyInjection",
+                "Tests — testes de integração dos endpoints com WebApplicationFactory"
+            ],
+            "Iniciante",
+            XFBadgeColor.Success,
+            "SQLite (padrão) ou PostgreSQL",
+            "Microsserviços, backends para mobile e integrações rápidas que precisam subir um endpoint no mesmo dia.",
+            false,
+            "Estrutura prevista para este modelo ({{NS}} é o namespace da solution). Hoje o gerador ativo é o Clean Architecture; os demais modelos já podem ser registrados no modal de novo projeto.",
+            BuildApiMinimaTree()),
+    ];
+
+    // ------------------------------------------------- Estruturas (fiéis ao gerador)
+
+    private static IReadOnlyList<TreeItem> BuildCleanArchitectureTree() => new[]
+    {
+        File("{{NS}}.sln"),
+        File("Directory.Build.props"),
+        File(".gitignore"),
+        File("README.md"),
+
+        Folder("src",
+            Folder("{{NS}}.Domain",
+                File("{{NS}}.Domain.csproj"),
+                Folder("Common",
+                    File("BaseEntity.cs"),
+                    File("Result.cs"))),
+            Folder("{{NS}}.Application",
+                File("{{NS}}.Application.csproj"),
+                Folder("Abstractions",
+                    File("IRepository.cs")),
+                Folder("Messaging",
+                    File("Messaging.cs")),
+                File("DependencyInjection.cs")),
+            Folder("{{NS}}.Infrastructure",
+                File("{{NS}}.Infrastructure.csproj"),
+                Folder("Persistence",
+                    File("{{NS}}DbContext.cs"),
+                    File("Repository.cs"),
+                    File("{{NS}}DbContextFactory.cs")),
+                Folder("Identity",
+                    File("ApplicationUser.cs")),
+                File("DependencyInjection.cs")),
+            Folder("{{NS}}.Api",
+                File("{{NS}}.Api.csproj"),
+                File("Program.cs"),
+                File("appsettings.json"),
+                File("appsettings.Development.json"),
+                Folder("Properties",
+                    File("launchSettings.json")),
+                Folder("Auth",
+                    File("Jwt.cs")),
+                Folder("Endpoints",
+                    File("AccountEndpoints.cs"))),
+            Folder("{{NS}}.Client",
+                File("{{NS}}.Client.csproj"),
+                File("Program.cs"),
+                File("App.razor"),
+                File("_Imports.razor"),
+                Folder("Services",
+                    File("{{NS}}ApiClient.cs")),
+                Folder("wwwroot",
+                    File("index.html"),
+                    File("appsettings.json")),
+                Folder("Properties",
+                    File("launchSettings.json")))),
+
+        Folder("tests",
+            Folder("{{NS}}.Tests",
+                File("{{NS}}.Tests.csproj"),
+                File("SmokeTests.cs")))
+    };
+
+    private static IReadOnlyList<TreeItem> BuildBlazorUnificadoTree() => new[]
+    {
+        File("{{NS}}.sln"),
+        File("Directory.Build.props"),
+        File(".gitignore"),
+        File("README.md"),
+
+        Folder("src",
+            Folder("{{NS}}.Blazor",
+                File("{{NS}}.Blazor.csproj"),
+                File("Program.cs"),
+                File("App.razor"),
+                File("_Imports.razor"),
+                Folder("Components",
+                    File("App.razor"),
+                    Folder("Layout",
+                        File("MainLayout.razor"),
+                        File("NavMenu.razor")),
+                    Folder("Pages",
+                        File("Home.razor"))),
+                Folder("Data",
+                    File("{{NS}}DbContext.cs")),
+                Folder("Services",
+                    File("{{NS}}Services.cs")),
+                Folder("wwwroot",
+                    File("appsettings.json")))),
+
+        Folder("tests",
+            Folder("{{NS}}.Tests",
+                File("{{NS}}.Tests.csproj"),
+                File("SmokeTests.cs")))
+    };
+
+    private static IReadOnlyList<TreeItem> BuildApiMinimaTree() => new[]
+    {
+        File("{{NS}}.sln"),
+        File("Directory.Build.props"),
+        File(".gitignore"),
+        File("README.md"),
+
+        Folder("src",
+            Folder("{{NS}}.Api",
+                File("{{NS}}.Api.csproj"),
+                File("Program.cs"),
+                Folder("Endpoints",
+                    File("ItemEndpoints.cs")),
+                File("appsettings.json")),
+            Folder("{{NS}}.Application",
+                File("{{NS}}.Application.csproj"),
+                Folder("Services",
+                    File("ItemService.cs"))),
+            Folder("{{NS}}.Infrastructure",
+                File("{{NS}}.Infrastructure.csproj"),
+                Folder("Persistence",
+                    File("{{NS}}DbContext.cs")),
+                File("DependencyInjection.cs"))),
+
+        Folder("tests",
+            Folder("{{NS}}.Tests",
+                File("{{NS}}.Tests.csproj"),
+                File("ApiTests.cs")))
+    };
+
+    private static IReadOnlyList<TreeLine> Flatten(IReadOnlyList<TreeItem> items, int depth = 0)
+    {
+        var lines = new List<TreeLine>();
+        foreach (var item in items)
+        {
+            lines.Add(new TreeLine(depth, item.Name, item.IsFolder));
+            lines.AddRange(Flatten(item.Children, depth + 1));
+        }
+        return lines;
+    }
+
+    // ------------------------------------------------------------------- estado
+
+    private string _filter = string.Empty;
+    private bool _showTreeModal;
+    private TemplateInfo? _treeTemplate;
+    private IReadOnlyList<TreeLine> _treeLines = Array.Empty<TreeLine>();
+
+    private IReadOnlyList<TemplateInfo> Filtered => string.IsNullOrWhiteSpace(_filter)
+        ? _templates
+        : _templates
+            .Where(t => t.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                || t.Tagline.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                || t.Provider.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                || t.WhenToUse.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                || t.Generates.Any(g => g.Contains(_filter, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+    private Task OnFilterChanged(string? value)
+    {
+        _filter = value ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
+    private Task ClearFilterAsync()
+    {
+        _filter = string.Empty;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Abre o modal de novo projeto em /projects já com o template escolhido.</summary>
+    private void UseTemplateAsync(TemplateInfo template)
+    {
+        _showTreeModal = false;
+        _treeTemplate = null;
+        Nav.NavigateTo($"/projects?template={Uri.EscapeDataString(template.Id)}");
+    }
+
+    private void ShowTreeAsync(TemplateInfo template)
+    {
+        _treeTemplate = template;
+        _treeLines = Flatten(template.Tree);
+        _showTreeModal = true;
+    }
+
+    private Task CloseTreeModalAsync()
+    {
+        _showTreeModal = false;
+        return Task.CompletedTask;
+    }
+
+    private Task OnTreeModalChanged(bool open)
+    {
+        _showTreeModal = open;
+        if (!open)
+        {
+            _treeTemplate = null;
+        }
+        return Task.CompletedTask;
+    }
+}

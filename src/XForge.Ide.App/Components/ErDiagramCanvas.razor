@@ -1,0 +1,71 @@
+@* ============================================================================
+   Canvas visual do Diagrama ER.
+
+   A marcação abaixo é só o "esqueleto": viewport (pan/zoom), mundo
+   transformado, camada SVG das arestas e os nós das entidades. Toda a
+   interação (arrastar, zoom, tooltip, realce) vive em wwwroot/js/er-diagram.js.
+   ============================================================================ *@
+
+<div class="ide-er__frame">
+    <div id="@_viewportId"
+         class="ide-er__viewport"
+         role="application"
+         tabindex="0"
+         aria-label="Diagrama ER interativo: arraste os nós, use Ctrl e a roda do mouse para zoom">
+        <div class="ide-er__world" data-er-world style="width:@Px(_worldWidth); height:@Px(_worldHeight);">
+            <svg class="ide-er__wires" aria-hidden="true">
+                <g data-er-wires></g>
+            </svg>
+
+            @foreach (var node in _nodes)
+            {
+                <div class="ide-er__node" data-er-node="@node.Name"
+                     style="transform: translate(@Px(node.X), @Px(node.Y));">
+                    <div class="ide-er__node-head">
+                        <span class="ide-er__node-glyph">@TableGlyph</span>
+                        <span class="ide-er__node-title">
+                            <span class="ide-er__node-name">@node.Name</span>
+                            <span class="ide-er__node-table">@node.Source.TableName</span>
+                        </span>
+                        <span class="ide-er__node-count">@node.Fields.Count</span>
+                    </div>
+                    <div class="ide-er__node-body">
+                        @foreach (var field in node.Fields.Take(MaxFieldsInNode))
+                        {
+                            <div class="ide-er__field @(field.PrimaryKey ? "is-pk" : null) @(field.ForeignKey ? "is-fk" : null)">
+                                <span class="ide-er__field-key">
+                                    @if (field.PrimaryKey)
+                                    {
+                                        @KeyGlyph
+                                    }
+                                    else if (field.ForeignKey)
+                                    {
+                                        @LinkGlyph
+                                    }
+                                </span>
+                                <span class="ide-er__field-name">@field.Name</span>
+                                <span class="ide-er__field-type">@field.ClrType</span>
+                                @if (field.Required)
+                                {
+                                    <span class="ide-er__field-req" title="obrigatório">*</span>
+                                }
+                            </div>
+                        }
+                        @if (node.Fields.Count > MaxFieldsInNode)
+                        {
+                            <div class="ide-er__field ide-er__field--more">
+                                + @(node.Fields.Count - MaxFieldsInNode) campos
+                            </div>
+                        }
+                        @if (node.Fields.Count == 0)
+                        {
+                            <div class="ide-er__field ide-er__field--empty">sem campos</div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+
+        <div class="ide-er__tip" data-er-tip hidden></div>
+    </div>
+</div>

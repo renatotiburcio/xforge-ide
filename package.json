@@ -1,0 +1,22 @@
+{
+  "name": "xforge-ide",
+  "version": "0.1.0",
+  "description": "XForge IDE - asset pipeline (Tailwind v4 + Monaco para o shell Blazor)",
+  "private": true,
+  "scripts": {
+    "build:monaco": "node scripts/copy-monaco.mjs",
+    "build:xterm": "node scripts/copy-xterm.mjs",
+    "build:css": "tailwindcss -i ./src/XForge.Ide.Server/app.css -o ./src/XForge.Ide.Server/wwwroot/css/ide-app.css",
+    "watch:css": "tailwindcss -i ./src/XForge.Ide.Server/app.css -o ./src/XForge.Ide.Server/wwwroot/css/ide-app.css --watch",
+    "build": "npm run build:monaco && npm run build:xterm && npm run build:css",
+    "qa:ui": "node scripts/qa-ui-a11y.mjs"
+  },
+  "devDependencies": {
+    "@microsoft/signalr": "^8.0.7",
+    "@tailwindcss/cli": "^4.1.8",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "monaco-editor": "^0.52.0",
+    "tailwindcss": "^4.1.8"
+  }
+}

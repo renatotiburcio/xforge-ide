@@ -1,0 +1,843 @@
+@page "/data/migrations"
+@rendermode InteractiveServer
+@using Microsoft.JSInterop
+@using XForge.Ide.Application.Dto
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Services
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@using XForge.DesignSystem.Components.Forms.TextInput
+@inject BuildRunService BuildRun
+@inject DictionaryService Dictionaries
+@inject MigrationService Migrations
+@inject IdeUiState Ui
+@inject IdeOutputService Output
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>XForge IDE — Migrations</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true">
+    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center" FullWidth="true">
+        <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Migrations</XFTypography>
+        <XFButton Text="Gerar migrations" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                  Size="XFExtendedSize.Sm" Disabled="@(_diagram is null)" OnClick="GenerateAsync" />
+        @foreach (var d in _dictionaries)
+        {
+            <XFButton Text="@d.Name"
+                      Variant="@(d.Id == _currentId ? XFButtonVariant.Solid : XFButtonVariant.Soft)"
+                      Color="@(d.Id == _currentId ? XFButtonColor.Primary : XFButtonColor.Secondary)"
+                      Size="XFExtendedSize.Sm" OnClick="() => LoadAsync(d.Id)" />
+        }
+    </XFStack>
+
+    @if (_message is not null)
+    {
+        <div role="status" aria-live="polite"
+             class="border border-success/30 bg-success/10 text-success-text rounded-md px-4 py-2 text-sm">@_message</div>
+    }
+    @if (_error is not null)
+    {
+        <div role="alert" aria-live="assertive"
+             class="border border-danger/30 bg-danger/10 text-danger-text rounded-md px-4 py-2 text-sm">@_error</div>
+    }
+
+    @if (Ui.CurrentProject is null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                    Abra um projeto em <b>Projetos</b> para a IDE criar e aplicar as migrations automaticamente.
+                </XFTypography>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        @* =============================================== alvos: Infrastructure / Api *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                    Projetos do migration
+                </XFTypography>
+                <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                    A IDE procura por convenção: pasta <code>src/</code>, projeto <b>.Infrastructure</b>
+                    (onde ficam as migrations) e <b>.Api</b> (startup, que carrega a connection string).
+                </XFTypography>
+
+                @if (_target is null)
+                {
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Warning" Class="mt-3">
+                        Não foi possível localizar os projetos automaticamente. Selecione abaixo.
+                    </XFTypography>
+                    <div class="grid gap-4 md:grid-cols-2 mt-3">
+                        <XFCombobox TItem="string" TValue="string" Label="Projeto das migrations *"
+                                    Placeholder="Selecione"
+                                    Items="@_projectList" TextSelector="@(p => p)" ValueSelector="@(p => p)"
+                                    Value="@_manualInfra" ValueChanged="OnManualInfraChanged" />
+                        <XFCombobox TItem="string" TValue="string" Label="Projeto de startup *"
+                                    Placeholder="Selecione"
+                                    Items="@_projectList" TextSelector="@(p => p)" ValueSelector="@(p => p)"
+                                    Value="@_manualApi" ValueChanged="OnManualApiChanged" />
+                        <XFTextInput Label="DbContext" Placeholder="MeuAppDbContext" Value="@_contextName"
+                                     ValueChanged="OnContextChanged" />
+                    </div>
+                }
+                else
+                {
+                    <div class="ide-migx__paths mt-3">
+                        <div>
+                            <span class="ide-migx__paths-label">Migrations (EF Core)</span>
+                            <code>@_target.InfraRelative</code>
+                        </div>
+                        <div>
+                            <span class="ide-migx__paths-label">Startup</span>
+                            <code>@_target.ApiRelative</code>
+                        </div>
+                        <div>
+                            <span class="ide-migx__paths-label">DbContext</span>
+                            <code>@_target.ContextName</code>
+                        </div>
+                        @if (!_target.FromConvention)
+                        {
+                            <div>
+                                <span class="ide-migx__paths-label">Origem</span>
+                                <code>seleção manual</code>
+                            </div>
+                        }
+                    </div>
+                }
+            </ChildContent>
+        </XFCard>
+
+        @* ============================================================ provider *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                    Provedor de banco
+                </XFTypography>
+                <div class="grid gap-4 md:grid-cols-2 mt-3">
+                    <XFCombobox TItem="string" TValue="string" Label="Provedor" Placeholder="Selecione"
+                                Items="@_providerIds" TextSelector="@(p => MigrationRunner.Provider(p).Label)" ValueSelector="@(p => p)"
+                                Value="@_provider" ValueChanged="OnProviderChanged" />
+                    <div class="ide-migx__provider-note">
+                        <XFTypography Variant="XFTypographyVariant.Caption" Weight="XFTypographyWeight.Semibold"
+                                        Color="XFTypographyColor.Muted">
+                            Pacote do provedor
+                        </XFTypography>
+                        <code>@CurrentProvider.Package</code>
+                        <XFTypography Variant="XFTypographyVariant.Caption" Weight="XFTypographyWeight.Semibold"
+                                        Color="XFTypographyColor.Muted" Class="mt-2">
+                            Connection string típica
+                        </XFTypography>
+                        <code>@CurrentProvider.ConnectionString</code>
+                    </div>
+                </div>
+                <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted" Class="mt-2">
+                    @CurrentProvider.Note A troca de provedor também exige ajustar o <code>UseSqlite</code>/<code>UseNpgsql</code>/
+                    <code>UseMySQL</code> no <code>DependencyInjection.cs</code> da Infrastructure.
+                </XFTypography>
+            </ChildContent>
+        </XFCard>
+
+        @* ============================================================== estado *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <div class="flex items-center justify-between mb-3">
+                    <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                        Situação
+                    </XFTypography>
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center">
+                        @if (_stateChecked)
+                        {
+                            <XFBadge Variant="XFBadgeVariant.Solid"
+                                      Color="@(_state.Ready ? XFBadgeColor.Success : XFBadgeColor.Warning)"
+                                      Text="@(_state.Ready ? "Pronto" : "Pendente")" />
+                        }
+                        else
+                        {
+                            <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Secondary" Text="Não verificado" />
+                        }
+                        <XFButton Text="Verificar status" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" Disabled="@_running" OnClick="RefreshStateAsync" />
+                    </XFStack>
+                </div>
+
+                <div class="ide-migx__stats">
+                    <div class="ide-migx__stat">
+                        <span class="ide-migx__stat-label">dotnet-ef instalado</span>
+                        <XFBadge Variant="XFBadgeVariant.Solid"
+                                  Color="@(_stateChecked && _state.ToolInstalled ? XFBadgeColor.Success : XFBadgeColor.Warning)"
+                                  Text="@(_stateChecked && _state.ToolInstalled ? "Pronto" : "Pendente")" />
+                        <span class="ide-migx__stat-detail">
+                            @(_stateChecked && _state.ToolInstalled ? _state.ToolVersion : _state.ToolMessage)
+                        </span>
+                    </div>
+                    <div class="ide-migx__stat">
+                        <span class="ide-migx__stat-label">EF Core Design referenciado</span>
+                        <XFBadge Variant="XFBadgeVariant.Solid"
+                                  Color="@(_stateChecked && _state.DesignReferenced ? XFBadgeColor.Success : XFBadgeColor.Warning)"
+                                  Text="@(_stateChecked && _state.DesignReferenced ? "Pronto" : "Pendente")" />
+                        <span class="ide-migx__stat-detail">Microsoft.EntityFrameworkCore.Design</span>
+                    </div>
+                    <div class="ide-migx__stat">
+                        <span class="ide-migx__stat-label">Migration existente</span>
+                        <XFBadge Variant="XFBadgeVariant.Solid"
+                                  Color="@(_stateChecked && _state.HasMigration ? XFBadgeColor.Success : XFBadgeColor.Warning)"
+                                  Text="@(_stateChecked && _state.HasMigration ? "Pronto" : "Pendente")" />
+                        <span class="ide-migx__stat-detail">@(_state.MigrationPath ?? "pasta Migrations ausente")</span>
+                    </div>
+                    <div class="ide-migx__stat">
+                        <span class="ide-migx__stat-label">Banco de dados</span>
+                        <XFBadge Variant="XFBadgeVariant.Solid"
+                                  Color="@DatabaseBadge.Color" Text="@DatabaseBadge.Text" />
+                        <span class="ide-migx__stat-detail">@(_state.DatabasePath ?? _providerNote)</span>
+                    </div>
+                </div>
+            </ChildContent>
+        </XFCard>
+
+        @* ============================================================== ações *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                    Ações em um clique
+                </XFTypography>
+                <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                    Cada ação executa os comandos <code>dotnet</code> em sequência e mostra a saída no console.
+                </XFTypography>
+
+                <div class="ide-migx__actions mt-3">
+                    <XFButton Text="Preparar ferramentas" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              Size="XFExtendedSize.Lg" FullWidth="true"
+                              Disabled="@(_running || _target is null || ToolsReady)"
+                              OnClick="PrepareToolsAsync" />
+                    <XFButton Text="Criar migration" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              Size="XFExtendedSize.Lg" FullWidth="true"
+                              Disabled="@(_running || !(_stateChecked && _state.ToolInstalled && _state.DesignReferenced))"
+                              OnClick="CreateMigrationAsync" />
+                    <XFButton Text="Aplicar ao banco" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Success"
+                              Size="XFExtendedSize.Lg" FullWidth="true"
+                              Disabled="@(_running || !(_stateChecked && _state.ToolInstalled && _state.DesignReferenced))"
+                              OnClick="ApplyDatabaseAsync" />
+                    <XFButton Text="Recriar banco" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Danger"
+                              Size="XFExtendedSize.Lg" FullWidth="true"
+                              Disabled="@(_running || !(_stateChecked && _state.ToolInstalled && _state.DesignReferenced))"
+                              OnClick="AskRecreateAsync" />
+                    @if (_running)
+                    {
+                        <XFButton Text="Parar" Variant="XFButtonVariant.Outline" Color="XFButtonColor.Danger"
+                                  Size="XFExtendedSize.Lg" FullWidth="true" OnClick="StopAsync" />
+                    }
+                </div>
+
+                @if (_running)
+                {
+                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="Executando…" Class="mt-3" />
+                }
+            </ChildContent>
+        </XFCard>
+
+        @* ============================================================= console *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.None" Class="ide-migx__card">
+            <ChildContent>
+                <div class="ide-migx__console-head">
+                    <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">
+                        Console
+                    </XFTypography>
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center">
+                        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                            @_lines.Count linhas
+                        </XFTypography>
+                        <XFButton Text="Limpar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="ClearConsole" />
+                        <XFButton Text="Copiar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="CopyConsoleAsync" />
+                    </XFStack>
+                </div>
+                <div class="ide-migx__console" id="ide-migx-console">
+                    @foreach (var line in _lines)
+                    {
+                        <div class="ide-migx__line ide-migx__line--@line.Kind">
+                            <span class="ide-migx__line-time">@line.Time</span>@line.Text
+                        </div>
+                    }
+                    @if (_lines.Count == 0)
+                    {
+                        <span class="ide-migx__console-empty">Aguardando um comando…</span>
+                    }
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+
+    @* ============================================== script SQL (referência) *@
+    @if (_scripts.Count > 0)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.None" Class="ide-mig">
+            <ChildContent>
+                <div class="ide-mig__head">
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                        <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">
+                            Script SQL (referência)
+                        </XFTypography>
+                        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                            gerado pelo dicionário — usar somente como consulta
+                        </XFTypography>
+                    </XFStack>
+                    <XFButton Text="@(_showScripts ? "Ocultar" : "Mostrar")" Variant="XFButtonVariant.Soft"
+                              Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                              OnClick="() => _showScripts = !_showScripts" />
+                </div>
+
+                @if (_showScripts)
+                {
+                    @foreach (var s in _scripts)
+                    {
+                        <div class="ide-mig__head">
+                            <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                                <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Primary" Text="@s.Label" />
+                                <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">@s.FileName</XFTypography>
+                            </XFStack>
+                            <XFButton Text="Copiar SQL" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                      Size="XFExtendedSize.Sm" OnClick="() => CopyAsync(s.Sql)" />
+                        </div>
+
+                        <pre class="ide-mig__sql">@s.Sql</pre>
+
+                        <XFTypography Variant="XFTypographyVariant.Caption" Weight="XFTypographyWeight.Semibold"
+                                       Color="XFTypographyColor.Muted" Class="ide-mig__cmd-title">
+                            Comandos equivalentes
+                        </XFTypography>
+                        <pre class="ide-mig__cmd">@s.Commands</pre>
+                    }
+                }
+            </ChildContent>
+        </XFCard>
+    }
+</XFStack>
+
+<ConfirmDialog Open="@_showRecreate" OpenChanged="OnRecreateChanged"
+               Title="Recriar banco de dados"
+               ConfirmMessage="Isso apaga TODOS os dados do banco do projeto e o recria do zero a partir das migrations. Não há desfazer."
+               TargetName="@(_target?.Root ?? string.Empty)"
+               ConfirmText="Recriar" OnConfirm="RecreateDatabaseAsync" />
+
+@code {
+    private IReadOnlyList<DictionaryDto> _dictionaries = Array.Empty<DictionaryDto>();
+    private ErDiagramDto? _diagram;
+    private Guid? _currentId;
+    private IReadOnlyList<MigrationScript> _scripts = Array.Empty<MigrationScript>();
+    private bool _showScripts = true;
+    private string? _message;
+    private string? _error;
+
+    // -------------------------------------------------------------- estado/alvos
+    private const string ConsoleId = "ide-migx-console";
+    private MigTarget? _target;
+    private MigState _state = new(false, string.Empty, string.Empty, false, false, null, false, null, null);
+    private bool _stateChecked;
+    private string _provider = "Sqlite";
+    private readonly string[] _providerIds = { "Sqlite", "PostgreSql", "MySql" };
+    private IReadOnlyList<string> _projectList = Array.Empty<string>();
+    private string? _manualInfra;
+    private string? _manualApi;
+    private string _contextName = string.Empty;
+
+    private MigProviderInfo CurrentProvider => MigrationRunner.Provider(_provider);
+    private string _providerNote => CurrentProvider.Note;
+
+    private (XFBadgeColor Color, string Text) DatabaseBadge
+    {
+        get
+        {
+            if (!_stateChecked)
+            {
+                return (XFBadgeColor.Secondary, "Não verificado");
+            }
+            if (_state.DatabaseExists)
+            {
+                return (XFBadgeColor.Success, "Pronto");
+            }
+            return string.Equals(_provider, "Sqlite", StringComparison.OrdinalIgnoreCase)
+                ? (XFBadgeColor.Warning, "Pendente")
+                : (XFBadgeColor.Secondary, "Não verificável");
+        }
+    }
+
+    private bool ToolsReady =>
+        _stateChecked && _state.ToolInstalled && _state.DesignReferenced
+        && MigrationRunner.HasProviderPackage(_target, CurrentProvider.Package);
+
+    // ------------------------------------------------------------------ console
+    private sealed record ConsoleLine(string Time, string Kind, string Text);
+
+    private readonly List<ConsoleLine> _lines = new();
+    private bool _running;
+    private bool _stopped;
+    private readonly List<(string Label, string Command)> _queue = new();
+    private int _stepIndex;
+    private string? _runId;
+    private string _runLabel = string.Empty;
+    private DateTime _lastScroll = DateTime.MinValue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        BuildRun.LineReceived += OnLineReceived;
+        BuildRun.Finished += OnFinished;
+        Ui.Changed += OnUiStateChanged;
+        await ReloadAsync();
+    }
+
+    private Guid? _lastProjectId;
+
+    private void OnUiStateChanged()
+    {
+        var id = Ui.CurrentProject?.Id;
+        if (id == _lastProjectId)
+        {
+            InvokeAsync(StateHasChanged);
+            return;
+        }
+        _lastProjectId = id;
+        InvokeAsync(async () =>
+        {
+            await ReloadAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (Ui.CurrentProject is null)
+        {
+            _dictionaries = Array.Empty<DictionaryDto>();
+            _diagram = null;
+            _target = null;
+            _stateChecked = false;
+            _message = null;
+            return;
+        }
+
+        ResolveTarget();
+        _message = null;
+        _dictionaries = await Dictionaries.ListByProjectAsync(Ui.CurrentProject.Id);
+        if (_dictionaries.Count > 0)
+        {
+            await LoadAsync(_dictionaries[0].Id);
+        }
+        else
+        {
+            _diagram = null;
+            _message = "Nenhum dicionário neste projeto. Crie um em Designer de Dados.";
+        }
+
+        await RefreshStateAsync();
+    }
+
+    /// <summary>Resolve os projetos pelo caminho do projeto aberto (convenção src/).</summary>
+    private void ResolveTarget()
+    {
+        var path = Ui.CurrentProject?.Path;
+        var byConvention = MigrationRunner.Discover(path);
+        if (byConvention is not null)
+        {
+            _target = byConvention;
+            _projectList = Array.Empty<string>();
+            _manualInfra = null;
+            _manualApi = null;
+            _contextName = byConvention.ContextName;
+            return;
+        }
+
+        var manual = BuildManualTarget();
+        if (manual is not null)
+        {
+            _target = manual;
+            return;
+        }
+
+        _target = null;
+        _projectList = MigrationRunner.ListProjects(path);
+        _contextName = string.IsNullOrWhiteSpace(_contextName)
+            ? Sanitize(Ui.CurrentProject?.Name ?? "App") + "DbContext"
+            : _contextName;
+    }
+
+    /// <summary>Monta o alvo a partir da escolha manual (mantido entre re-verificações).</summary>
+    private MigTarget? BuildManualTarget()
+    {
+        if (string.IsNullOrWhiteSpace(_manualInfra) || string.IsNullOrWhiteSpace(_manualApi))
+        {
+            return null;
+        }
+        var root = MigrationRunner.ResolveRoot(Ui.CurrentProject?.Path);
+        if (root is null)
+        {
+            return null;
+        }
+        return MigrationRunner.Manual(root, _manualInfra, _manualApi, _contextName);
+    }
+
+    private async Task LoadAsync(Guid dictionaryId)
+    {
+        _currentId = dictionaryId;
+        _diagram = await Dictionaries.GetErDiagramAsync(dictionaryId);
+        _error = null;
+        StateHasChanged();
+    }
+
+    // ------------------------------------------------------------ detecção
+    private async Task RefreshStateAsync()
+    {
+        if (Ui.CurrentProject is null)
+        {
+            return;
+        }
+        ResolveTarget();
+        try
+        {
+            _state = await Task.Run(() => MigrationRunner.Detect(_target));
+            _stateChecked = true;
+            _error = null;
+            Ui.SetStatus(_state.Ready
+                ? "Migrations prontas"
+                : "Migrations pendentes — use as ações abaixo");
+        }
+        catch (Exception ex)
+        {
+            _error = "Falha ao verificar o estado: " + ex.Message;
+        }
+        StateHasChanged();
+    }
+
+    // --------------------------------------------------------------- comandos
+    private async Task GenerateAsync()
+    {
+        _error = null;
+        _message = null;
+        if (_diagram is null || Ui.CurrentProject is null || _currentId is null)
+        {
+            return;
+        }
+        if (_diagram.Nodes.Count == 0)
+        {
+            _error = "Dicionário sem entidades — nada para gerar.";
+            return;
+        }
+
+        var ns = Sanitize(Ui.CurrentProject.Name);
+        _scripts = await Migrations.GenerateAsync(_diagram, ns, ns + "DbContext");
+        _message = $"Gerados {_scripts.Count} scripts ({_scripts.Count} bancos).";
+        StateHasChanged();
+    }
+
+    private string WorkingDirectory() => _target?.Root ?? Ui.CurrentProject?.Path ?? ".";
+
+    /// <summary>Instala o dotnet-ef e referencia o pacote Design + o do provider.</summary>
+    private async Task PrepareToolsAsync()
+    {
+        if (_target is null)
+        {
+            return;
+        }
+
+        var steps = new List<(string, string)>
+        {
+            ("Instalar dotnet-ef", "tool install --global dotnet-ef"),
+            ("Referenciar EF Core Design", $"add {_target.InfraRelative} package Microsoft.EntityFrameworkCore.Design"),
+        };
+
+        if (!MigrationRunner.HasProviderPackage(_target, CurrentProvider.Package))
+        {
+            steps.Add(($"Referenciar {CurrentProvider.Label}", $"add {_target.InfraRelative} package {CurrentProvider.Package}"));
+        }
+
+        await RunStepsAsync(steps);
+    }
+
+    private async Task CreateMigrationAsync()
+    {
+        if (_target is null)
+        {
+            return;
+        }
+        await RunStepsAsync(new[]
+        {
+            ("Criar migration",
+                $"ef migrations add InitialCreate --project {_target.InfraRelative} " +
+                $"--startup-project {_target.ApiRelative} --context {_target.ContextName}"),
+        });
+    }
+
+    private async Task ApplyDatabaseAsync()
+    {
+        if (_target is null)
+        {
+            return;
+        }
+        await RunStepsAsync(new[]
+        {
+            ("Aplicar ao banco",
+                $"ef database update --project {_target.InfraRelative} " +
+                $"--startup-project {_target.ApiRelative} --context {_target.ContextName}"),
+        });
+    }
+
+    private Task AskRecreateAsync()
+    {
+        _showRecreate = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task RecreateDatabaseAsync()
+    {
+        if (_target is null)
+        {
+            return;
+        }
+        await RunStepsAsync(new[]
+        {
+            ("Descartar banco",
+                $"ef database drop --force --project {_target.InfraRelative} " +
+                $"--startup-project {_target.ApiRelative} --context {_target.ContextName}"),
+            ("Recriar banco",
+                $"ef database update --project {_target.InfraRelative} " +
+                $"--startup-project {_target.ApiRelative} --context {_target.ContextName}"),
+        });
+    }
+
+    private async Task RunStepsAsync(IEnumerable<(string Label, string Command)> steps)
+    {
+        if (_running)
+        {
+            return;
+        }
+        _queue.Clear();
+        _queue.AddRange(steps);
+        if (_queue.Count == 0)
+        {
+            return;
+        }
+
+        _lines.Clear();
+        _running = true;
+        _stopped = false;
+        _error = null;
+        _message = null;
+        _stepIndex = 0;
+        Ui.SetStatus("Executando comandos dotnet…");
+        StateHasChanged();
+        await NextStepAsync();
+    }
+
+    private async Task NextStepAsync()
+    {
+        if (!_running || _stopped)
+        {
+            return;
+        }
+        if (_stepIndex >= _queue.Count)
+        {
+            _running = false;
+            _message = $"Fluxo concluído ({_queue.Count} comandos).";
+            Ui.SetStatus("Fluxo de migrations concluído");
+            await RefreshStateAsync();
+            return;
+        }
+
+        var (label, command) = _queue[_stepIndex];
+        _runLabel = label;
+        AddLine("cmd", $"[{_stepIndex + 1}/{_queue.Count}] {label}");
+        AddLine("out", $"> dotnet {command}");
+
+        try
+        {
+            var task = await BuildRun.RunAsync(command, WorkingDirectory());
+            _runId = task.Id;
+        }
+        catch (Exception ex)
+        {
+            AddLine("err", ex.Message);
+            _running = false;
+            _error = $"Não foi possível iniciar \"{label}\": {ex.Message}";
+        }
+        StateHasChanged();
+    }
+
+    private void OnLineReceived(string id, string tag, string text)
+    {
+        if (string.IsNullOrEmpty(_runId) || id != _runId)
+        {
+            return;
+        }
+        AddLine(tag, text);
+        Output.Write("Migrations", text);
+        InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            if ((DateTime.UtcNow - _lastScroll).TotalMilliseconds > 200)
+            {
+                _lastScroll = DateTime.UtcNow;
+                await ScrollConsoleAsync();
+            }
+        });
+    }
+
+    private void OnFinished(string id, int exitCode)
+    {
+        if (string.IsNullOrEmpty(_runId) || id != _runId)
+        {
+            return;
+        }
+
+        if (_stopped)
+        {
+            AddLine("info", $"[{_stepIndex + 1}/{_queue.Count}] {_runLabel} interrompido.");
+            InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        AddLine(exitCode == 0 ? "ok" : "err",
+            $"[{_stepIndex + 1}/{_queue.Count}] {_runLabel} -> código {exitCode}");
+
+        if (exitCode != 0)
+        {
+            _running = false;
+            _error = $"\"{_runLabel}\" terminou com o código {exitCode}. Veja o console.";
+            Ui.SetStatus("Comando falhou");
+            InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        _stepIndex++;
+        InvokeAsync(async () =>
+        {
+            await NextStepAsync();
+            StateHasChanged();
+        });
+    }
+
+    private Task StopAsync()
+    {
+        if (!_running)
+        {
+            return Task.CompletedTask;
+        }
+        _stopped = true;
+        _running = false;
+        if (_runId is not null)
+        {
+            BuildRun.Stop(_runId);
+        }
+        else
+        {
+            BuildRun.StopAll();
+        }
+        AddLine("info", "Execução interrompida pelo usuário.");
+        _message = "Execução interrompida.";
+        Ui.SetStatus("Execução interrompida");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private void AddLine(string kind, string text)
+    {
+        _lines.Add(new ConsoleLine(DateTime.Now.ToString("HH:mm:ss"), kind, text));
+        if (_lines.Count > 3000)
+        {
+            _lines.RemoveAt(0);
+        }
+    }
+
+    private Task ClearConsole()
+    {
+        _lines.Clear();
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task CopyConsoleAsync()
+    {
+        var text = string.Join("\n", _lines.Select(l => $"{l.Time} {l.Text}"));
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Ui.SetStatus("Console copiado");
+        }
+        catch
+        {
+            Ui.SetStatus("Não foi possível copiar");
+        }
+    }
+
+    private async Task ScrollConsoleAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval",
+                $"var e=document.getElementById('{ConsoleId}'); if(e) e.scrollTop = e.scrollHeight;");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch
+        {
+            // interop indisponível
+        }
+    }
+
+    // ------------------------------------------------------------- seletores
+    private Task OnProviderChanged(string? value)
+    {
+        _provider = value ?? "Sqlite";
+        return RefreshStateAsync();
+    }
+
+    private Task OnManualInfraChanged(string? value)
+    {
+        _manualInfra = value;
+        return RefreshStateAsync();
+    }
+
+    private Task OnManualApiChanged(string? value)
+    {
+        _manualApi = value;
+        return RefreshStateAsync();
+    }
+
+    private Task OnContextChanged(string value)
+    {
+        _contextName = value;
+        return Task.CompletedTask;
+    }
+
+    private bool _showRecreate;
+
+    private Task OnRecreateChanged(bool open)
+    {
+        _showRecreate = open;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    // ------------------------------------------------------------------- misc
+    private Task CopyAsync(string text)
+    {
+        return JS.InvokeVoidAsync("navigator.clipboard.writeText", text).AsTask();
+    }
+
+    private static string Sanitize(string name) =>
+        System.Text.RegularExpressions.Regex.Replace(name, "[^A-Za-z0-9]", string.Empty);
+
+    public void Dispose()
+    {
+        BuildRun.LineReceived -= OnLineReceived;
+        BuildRun.Finished -= OnFinished;
+        Ui.Changed -= OnUiStateChanged;
+    }
+}

@@ -1,0 +1,25 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+artifacts/
+TestResults/
+*.db
+*.db-shm
+*.db-wal
+
+# Node (pipeline Tailwind)
+node_modules/
+**/wwwroot/css/ide-app.css
+**/wwwroot/monaco/
+**/wwwroot/xterm/
+
+# IDE
+.idea/
+*.swp
+
+# Qualidade
+qa-report.json
+qa-server.log

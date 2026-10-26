@@ -1,0 +1,69 @@
+@using XForge.DesignSystem.Components.Overlays.Dialog
+
+<XFDialog Open="@Open" OpenChanged="OnOpenChanged" Title="@Title" Description="@Description"
+          Size="Size" CloseOnOverlayClick="CloseOnBackdropClick">
+    <ChildContent>
+        @ChildContent
+    </ChildContent>
+    <Footer>
+        <div class="flex justify-end gap-2 w-full">
+            @if (FooterActions is not null)
+            {
+                @FooterActions
+            }
+            else
+            {
+                <XFButton Text="Cancelar" Autofocus="true" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                          OnClick="CloseAsync" />
+                @if (ShowConfirm)
+                {
+                    <XFButton Text="@ConfirmText" Variant="XFButtonVariant.Solid" Color="ConfirmColor"
+                              OnClick="OnConfirmClickAsync" />
+                }
+            }
+        </div>
+    </Footer>
+</XFDialog>
+
+@code {
+    /// <summary>Controla a visibilidade (two-way: @bind-Open).</summary>
+    [Parameter] public bool Open { get; set; }
+
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+
+    /// <summary>Título do modal.</summary>
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+
+    [Parameter] public string? Description { get; set; }
+
+    /// <summary>Conteúdo do formulário.</summary>
+    [Parameter, EditorRequired] public RenderFragment ChildContent { get; set; } = default!;
+
+    /// <summary>Ações do rodapé — quando omitido, usa Cancelar + Confirmar.</summary>
+    [Parameter] public RenderFragment? FooterActions { get; set; }
+
+    /// <summary>Ação do botão de confirmação (modo CRUD).</summary>
+    [Parameter] public EventCallback ConfirmAction { get; set; }
+
+    [Parameter] public string ConfirmText { get; set; } = "Salvar";
+
+    [Parameter] public XFButtonColor ConfirmColor { get; set; } = XFButtonColor.Primary;
+
+    [Parameter] public XFOverlaySize Size { get; set; } = XFOverlaySize.Md;
+
+    [Parameter] public bool CloseOnBackdropClick { get; set; }
+
+    /// <summary>Exibe o botão de confirmação somente quando há ação atribuída.</summary>
+    private bool ShowConfirm => ConfirmAction.HasDelegate;
+
+    private Task OnConfirmClickAsync()
+        => ConfirmAction.HasDelegate ? ConfirmAction.InvokeAsync() : Task.CompletedTask;
+
+    private async Task CloseAsync()
+    {
+        Open = false;
+        await OpenChanged.InvokeAsync(false);
+    }
+
+    private Task OnOpenChanged(bool open) => OpenChanged.InvokeAsync(open);
+}

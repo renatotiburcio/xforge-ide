@@ -1,0 +1,67 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <script>
+        // Early theme/brand detection - aplica ANTES do CSS carregar (evita flash)
+        (function () {
+            var theme = localStorage.getItem('xf-theme');
+            if (theme === 'dark' || theme === 'light') {
+                document.documentElement.setAttribute('data-theme', theme);
+            }
+            var brand = localStorage.getItem('xf-brand') || localStorage.getItem('xf-nav-brand');
+            if (brand) {
+                var brandValue = brand.startsWith('brand-') ? brand : 'brand-' + brand;
+                document.documentElement.setAttribute('data-brand', brandValue);
+            }
+        })();
+    </script>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <ResourcePreloader />
+    <!-- Tailwind (utilitários gerados a partir dos componentes XF* + páginas da IDE) -->
+    <link rel="stylesheet" href="@Assets["css/ide-app.css"]" />
+    <!-- Tokens de tema do XForge Design System -->
+    <link rel="stylesheet" href="@Assets["_content/XForge.DesignSystem/css/xf-designsystem.css"]" />
+    <link rel="stylesheet" href="@Assets["_content/XForge.DesignSystem/css/xf-scrollbar.css"]" />
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <ReconnectModal />
+    <!-- Interop do XForge Design System -->
+    <script type="module" src="@Assets["_content/XForge.DesignSystem/js/xf-theme.js"]"></script>
+    <!-- Terminal integrado (xterm + SignalR, embed local).
+         DEVE vir ANTES do loader do Monaco: o loader define um `define.amd`
+         global e o UMD do xterm se registraria como módulo anônimo. -->
+    <link rel="stylesheet" href="@Assets["xterm/js/xterm.css"]" />
+    <script src="@Assets["xterm/js/xterm.js"]"></script>
+    <script src="@Assets["xterm/js/addon-fit.js"]"></script>
+    <script src="@Assets["xterm/js/signalr.min.js"]"></script>
+    <script src="@Assets["_content/XForge.Ide.App/js/terminal-interop.js"]"></script>
+    <!-- Divisor do painel inferior + atalho Ctrl+` -->
+    <script src="@Assets["_content/XForge.Ide.App/js/ide-splitter.js"]"></script>
+    <!-- Atalhos do editor: Ctrl+W, Ctrl+Shift+F, Ctrl+P, F5 -->
+    <script src="@Assets["_content/XForge.Ide.App/js/ide-hotkeys.js"]"></script>
+    <!-- IntelliSense (Roslyn) — completions/hover/diagnósticos via SignalR -->
+    <script src="@Assets["_content/XForge.Ide.App/js/monaco-intellisense.js"]"></script>
+    <!-- Monaco Editor (embed AMD local) — loader sob demanda via monaco-interop.js -->
+    <script src="@Assets["_content/XForge.Ide.App/js/monaco-interop.js"]"></script>
+    <!-- Pickers nativos (pasta/arquivo) -->
+    <script src="@Assets["_content/XForge.Ide.App/js/pickers-interop.js"]"></script>
+    <!-- Reposicionador universal de popups (dropdowns/menus/calendários) -->
+    <script src="@Assets["_content/XForge.Ide.App/js/popup-interop.js"]"></script>
+    <script src="@Assets["_content/XForge.DesignSystem/js/xf-nav-state.js"]"></script>
+    <script src="@Assets["_content/XForge.DesignSystem/js/xf-tooltip.js"]"></script>
+    <script src="@Assets["_content/XForge.DesignSystem/js/xf-focus-trap.js"]"></script>
+    <script src="@Assets["_content/XForge.DesignSystem/js/xf-dialog.js"]"></script>
+    <script src="@Assets["_content/XForge.DesignSystem/js/xf-popover.js"]"></script>
+    <script src="@Assets["_content/XForge.DesignSystem/js/xf-splitter.js"]"></script>
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

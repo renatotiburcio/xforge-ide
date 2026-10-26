@@ -1,0 +1,306 @@
+@page "/projects"
+@rendermode InteractiveServer
+@using XForge.Ide.Application.Services
+@using XForge.Ide.Application.Dto
+@using XForge.Ide.App.Components
+@using XForge.DesignSystem.Components.Forms.Combobox
+@inject ProjectService ProjectSvc
+@inject IdeUiState Ui
+@inject NavigationManager Nav
+
+
+<PageTitle>XForge IDE — Projetos</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+        <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Projetos</XFTypography>
+        <XFButton Text="Novo projeto" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                  OnClick="OpenNewModalAsync" />
+    </XFStack>
+
+    @if (_message is not null)
+    {
+        <div role="status" aria-live="polite"
+             class="@(_messageIsError ? "border border-danger/30 bg-danger/10 text-danger-text" : "border border-success/30 bg-success/10 text-success-text") rounded-md px-4 py-2 text-sm">
+            @_message
+        </div>
+    }
+
+    @* Filtro rápido por nome/caminho/template *@
+    @if (_projects.Count > 3)
+    {
+        <XFTextInput Label="Filtrar projetos" Placeholder="nome, caminho ou template…" Immediate="true"
+                     Value="@_filter" ValueChanged="OnFilterChanged" />
+    }
+
+    <XFTable Striped="true" Hoverable="true" Compact="true">
+        <XFTableHeader>
+            <XFTableRow>
+                <XFTableCell Header="true">Nome</XFTableCell>
+                <XFTableCell Header="true">Template</XFTableCell>
+                <XFTableCell Header="true">Caminho</XFTableCell>
+                <XFTableCell Header="true">Criado</XFTableCell>
+                <XFTableCell Header="true">Ações</XFTableCell>
+            </XFTableRow>
+        </XFTableHeader>
+        <XFTableBody>
+            @foreach (var p in VisibleProjects)
+            {
+                <XFTableRow>
+                    <XFTableCell>@p.Name</XFTableCell>
+                    <XFTableCell><span class="text-text-muted text-sm">@p.TemplateKind</span></XFTableCell>
+                    <XFTableCell><span class="text-text-muted text-sm">@p.Path</span></XFTableCell>
+                    <XFTableCell>@p.CreatedAt.ToLocalTime().ToString("g")</XFTableCell>
+                    <XFTableCell>
+                        <div class="flex gap-2">
+                            <XFButton Text="Abrir" AriaLabel="@($"Abrir {p.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                                      OnClick="() => OpenAsync(p)" />
+                            <XFButton Text="Remover" AriaLabel="@($"Remover {p.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                                      OnClick="() => AskDeleteAsync(p)" />
+                        </div>
+                    </XFTableCell>
+                </XFTableRow>
+            }
+        </XFTableBody>
+    </XFTable>
+
+    <DataPager TotalItems="Filtered.Count()" Page="_page" PageSize="PageSize" PageChanged="OnPageChanged" />
+</XFStack>
+
+@* ------------------------------------------------------------ Modal: novo projeto *@
+<Modal Open="@_showNewModal" OpenChanged="OnNewModalChanged"
+       Title="Novo projeto" Description="Registre a solution gerada pela XForge IDE"
+       ConfirmText="Criar projeto" ConfirmColor="XFButtonColor.Primary" ConfirmAction="CreateAsync">
+    <div class="grid gap-4 md:grid-cols-2">
+        <XFTextInput Label="Nome *" Placeholder="Meu Sistema"
+                      Value="@_name" ValueChanged="(string v) => _name = v ?? string.Empty" />
+        <PickerField Mode="folder" Label="Diretório da solution *" Placeholder="E:\Projetos\MeuSistema"
+                     RecentKey="xf-recent-folders"
+                     Value="@_path" ValueChanged="OnPathChangedAsync" />
+        <XFCombobox TItem="string" TValue="string" Label="Template"
+                    Placeholder="Selecione ou pesquise"
+                    Items="@_templates"
+                    TextSelector="@(t => t)"
+                    ValueSelector="@(t => t)"
+                    Value="@_templateKind" ValueChanged="OnTemplateChanged" />
+        <XFTextInput Label="Descrição" Placeholder="Opcional"
+                      Value="@_description" ValueChanged="(string v) => _description = v" />
+    </div>
+</Modal>
+
+@* --------------------------------------------------- Modal: confirmar exclusão *@
+<ConfirmDialog Open="@_showDeleteConfirm" OpenChanged="OnDeleteConfirmChanged"
+               Title="Excluir projeto"
+               ConfirmMessage="Esta ação remove o registro do projeto na IDE. Os arquivos no disco não são apagados."
+               TargetName="@_deleteTarget?.Name"
+               ConfirmText="Excluir projeto"
+               OnConfirm="DeleteConfirmedAsync" />
+
+@code {
+    private IReadOnlyList<ProjectDto> _projects = Array.Empty<ProjectDto>();
+    private string _filter = string.Empty;
+    private int _page = 1;
+    private const int PageSize = 20;
+
+    private void OnFilterChanged(string? value)
+    {
+        _filter = value ?? string.Empty;
+        _page = 1;
+        StateHasChanged();
+    }
+
+    private Task OnPageChanged(int page)
+    {
+        _page = page;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private IEnumerable<ProjectDto> Filtered => string.IsNullOrWhiteSpace(_filter)
+        ? _projects
+        : _projects.Where(p => p.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+            || (p.Path?.Contains(_filter, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (p.TemplateKind?.Contains(_filter, StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private IEnumerable<ProjectDto> VisibleProjects =>
+        Filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+
+    private string? _message;
+    private bool _messageIsError;
+
+    private static readonly string[] _templates =
+    [
+        "clean-architecture",
+        "blazor-unificado",
+        "api-minima"
+    ];
+
+    // Modal novo projeto
+    private bool _showNewModal;
+    private string _name = string.Empty;
+    private string _path = string.Empty;
+    private string _templateKind = "clean-architecture";
+    private string? _description;
+
+    // Modal confirmar exclusão
+    private bool _showDeleteConfirm;
+    private ProjectDto? _deleteTarget;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        ApplyTemplateFromQuery();
+    }
+
+    /// <summary>
+    /// Lê ?template=&lt;id&gt; (links de /models), pré-seleciona o modelo no combobox
+    /// e abre o modal de novo projeto já configurado.
+    /// </summary>
+    private void ApplyTemplateFromQuery()
+    {
+        var query = Nav.Uri;
+        var index = query.IndexOf('?');
+        if (index < 0) return;
+
+        foreach (var pair in query[(index + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length != 2) continue;
+            if (!string.Equals(Uri.UnescapeDataString(parts[0]), "template", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var requested = Uri.UnescapeDataString(parts[1]);
+            if (!_templates.Contains(requested, StringComparer.OrdinalIgnoreCase)) continue;
+
+            _templateKind = _templates.First(t => string.Equals(t, requested, StringComparison.OrdinalIgnoreCase));
+            _description = null;
+            _message = null;
+            _showNewModal = true;
+            return;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _projects = await ProjectSvc.ListAsync();
+        _page = 1;
+    }
+
+    private Task OpenNewModalAsync()
+    {
+        _name = string.Empty;
+        _path = string.Empty;
+        _description = null;
+        _showNewModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnTemplateChanged(string? value)
+    {
+        _templateKind = value ?? "clean-architecture";
+        return Task.CompletedTask;
+    }
+
+    private Task OnPathChangedAsync(string? value)
+    {
+        _path = value ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
+    private Task OnNewModalChanged(bool open)
+        {
+            _showNewModal = open;
+            return Task.CompletedTask;
+        }
+
+    private async Task CreateAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            _messageIsError = true;
+            _message = "Informe o nome do projeto.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_path))
+        {
+            _messageIsError = true;
+            _message = "Informe o diretório da solution.";
+            return;
+        }
+
+        if (!System.IO.Path.IsPathFullyQualified(_path.Trim()))
+        {
+            _messageIsError = true;
+            _message = "Informe um caminho absoluto para o diretório da solution.";
+            return;
+        }
+
+        var result = await ProjectSvc.CreateAsync(_name.Trim(), _path.Trim(), _templateKind, _description?.Trim());
+        if (result.IsSuccess)
+        {
+            _showNewModal = false;
+            _messageIsError = false;
+            _message = $"Projeto '{result.Value.Name}' registrado.";
+            await LoadAsync();
+        }
+        else
+        {
+            _messageIsError = true;
+            _message = result.Error;
+        }
+    }
+
+    private async Task OpenAsync(ProjectDto p)
+    {
+        var result = await ProjectSvc.OpenAsync(p.Id);
+        if (result.IsSuccess)
+        {
+            Ui.SetProject(result.Value);
+            await Ui.PersistAsync();
+            _messageIsError = false;
+            _message = $"Projeto '{p.Name}' aberto.";
+        }
+        else
+        {
+            _messageIsError = true;
+            _message = result.Error;
+        }
+    }
+
+    private Task AskDeleteAsync(ProjectDto p)
+    {
+        _deleteTarget = p;
+        _showDeleteConfirm = true;
+        Ui.SetStatus("EXCLUIR? " + p.Name);
+        return Task.CompletedTask;
+    }
+
+    private Task OnDeleteConfirmChanged(bool open)
+    {
+        _showDeleteConfirm = open;
+        if (!open)
+        {
+            _deleteTarget = null;
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_deleteTarget is null) return;
+        var target = _deleteTarget;
+        _deleteTarget = null;
+        _showDeleteConfirm = false;
+
+        var result = await ProjectSvc.DeleteAsync(target.Id);
+        _messageIsError = !result.IsSuccess;
+        _message = result.IsSuccess ? $"Projeto '{target.Name}' removido." : result.Error;
+
+        if (Ui.CurrentProject?.Id == target.Id)
+        {
+            Ui.SetProject(null);
+            await Ui.PersistAsync();
+        }
+        await LoadAsync();
+    }
+}

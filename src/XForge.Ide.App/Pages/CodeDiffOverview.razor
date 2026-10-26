@@ -1,0 +1,926 @@
+@page "/code/diff"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
+@using System.Text.Json.Serialization
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Components
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@using XForge.DesignSystem.Components.Icon
+@inject FileSystemService Files
+@inject IdeUiState Ui
+@inject IdeEditorState EditorState
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>XForge IDE — Diff e merge</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true">
+    @* ----------------------------------------------------------- cabecalho *@
+    <div class="ide-df__head">
+        <div>
+            <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Diff e merge</XFTypography>
+            <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                Monaco em modo diff: navegue entre as diferenças ("3 de 12"), colapse o que não mudou,
+                ignore espaços em branco, veja em linha e aplique o lado modificado com confirmação.
+            </XFTypography>
+        </div>
+        <div class="ide-df__head-badges">
+            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Secondary" Text="@ActiveLabel" />
+        </div>
+    </div>
+
+    @* -------------------------------------------------------------- selecao *@
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+        <ChildContent>
+            <div class="ide-diff__bar">
+                @if (_mode == "unsaved")
+                {
+                    <div class="ide-df__field">
+                        <XFTypography Variant="XFTypographyVariant.Caption" Weight="XFTypographyWeight.Semibold"
+                                      Color="XFTypographyColor.Muted">Original - nao salvas (buffer do editor)</XFTypography>
+                        <div class="ide-df__readonly" title="@BufferLabel">
+                            @BufferLabel
+                        </div>
+                    </div>
+                    <div class="ide-df__field">
+                        <XFTypography Variant="XFTypographyVariant.Caption" Weight="XFTypographyWeight.Semibold"
+                                      Color="XFTypographyColor.Muted">Modificado — arquivo no disco</XFTypography>
+                        <div class="ide-df__readonly" title="@DiskLabel">
+                            @DiskLabel
+                        </div>
+                    </div>
+                }
+                else if (_mode == "compare")
+                {
+                    <div class="ide-df__field">
+                        <XFTypography Variant="XFTypographyVariant.Caption" Weight="XFTypographyWeight.Semibold"
+                                      Color="XFTypographyColor.Muted">Original (lado esquerdo) - arquivo ativo</XFTypography>
+                        <div class="ide-df__readonly" title="@ActivePathLabel">
+                            @ActivePathLabel
+                        </div>
+                    </div>
+                    <PickerField Mode="file" Label="Comparar com (modificado)" Placeholder="selecione outro arquivo..."
+                                 RecentKey="xf-diff-compare-recent" Accept=".cs,.razor,.json,.md,.css,.js,.ts,.sql,.xml,.txt"
+                                 Value="@_rightPath" ValueChanged="OnRightPathChangedAsync" />
+                }
+                else
+                {
+                    <PickerField Mode="file" Label="Original (esquerda)" Placeholder="caminho do arquivo…"
+                                 RecentKey="xf-diff-left-recent"
+                                 Value="@_leftPath" ValueChanged="OnLeftPathChangedAsync" />
+                    <PickerField Mode="file" Label="Modificado (direita)" Placeholder="caminho do arquivo…"
+                                 RecentKey="xf-diff-right-recent"
+                                 Value="@_rightPath" ValueChanged="OnRightPathChangedAsync" />
+                }
+
+                <div class="ide-df__field ide-df__field--actions">
+                    <XFButton Text="Comparar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              Size="XFExtendedSize.Sm" StartIcon="@Svg("code-compare")" OnClick="CompareAsync" />
+                    <XFButton Text="Limpar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                              Size="XFExtendedSize.Sm" StartIcon="@Svg("xmark")" OnClick="ClearAsync" />
+                </div>
+            </div>
+
+            <div class="ide-diff__modes">
+                @foreach (var (mode, label) in Modes)
+                {
+                    <button class="ide-diff__mode @(_mode == mode ? "ide-diff__mode--active" : null)"
+                            title="@ModeHint(mode)"
+                            aria-label="@ModeHint(mode)"
+                            aria-pressed="@(_mode == mode ? "true" : "false")"
+                            @onclick="() => SetModeAsync(mode)">
+                        @label
+                    </button>
+                }
+            </div>
+
+            @if (_error is not null)
+            {
+                <div class="ide-df__alert" role="alert">
+                    <span class="ide-df__alert-icon">@((MarkupString)XFSvgIcons.Get("circle-exclamation"))</span>
+                    <span>@_error</span>
+                </div>
+            }
+        </ChildContent>
+    </XFCard>
+
+    @* ---------------------------------------------------------------- diff *@
+    @if (_left is not null && _right is not null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.None" Class="ide-diff__card">
+            <ChildContent>
+                @* barra superior: os dois caminhos, o badge e a troca de lado *@
+                <div class="ide-diff__head">
+                    <span class="ide-df__side" title="@_leftName">
+                        <span class="ide-df__side-icon">@((MarkupString)XFSvgIcons.Get("file-code"))</span>
+                        @ShortName(_leftName)
+                    </span>
+                    <div class="ide-df__head-center">
+                        <XFBadge Variant="@(_diffCount > 0 ? XFBadgeVariant.Solid : XFBadgeVariant.Soft)"
+                                  Color="@(_diffCount > 0 ? XFBadgeColor.Warning : XFBadgeColor.Success)"
+                                  Text="@BadgeText" />
+                        @if (_mode != "unsaved")
+                        {
+                            <XFButton Text="Trocar lado" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                      Size="XFExtendedSize.Sm" StartIcon="@Svg("arrow-right-arrow-left")"
+                                      OnClick="SwapAsync" />
+                        }
+                        else
+                        {
+                            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info"
+                                      Text="somente leitura" />
+                        }
+                    </div>
+                    <span class="ide-df__side ide-df__side--right" title="@_rightName">
+                        @ShortName(_rightName)
+                        <span class="ide-df__side-icon">@((MarkupString)XFSvgIcons.Get("file-code"))</span>
+                    </span>
+                </div>
+
+                @* barra de ações: navegação, liga/desliga e ações *@
+                <div class="ide-df__toolbar">
+                    <div class="ide-df__group">
+                        <XFButton Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                                  StartIcon="@Svg("arrow-left")" Title="Diferença anterior (Alt+F5 no Monaco)"
+                                  AriaLabel="Diferença anterior" OnClick="DiffPrevAsync" />
+                        <span class="ide-df__counter" aria-live="polite">@Counter</span>
+                        <XFButton Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                                  StartIcon="@Svg("arrow-right")" Title="Próxima diferença"
+                                  AriaLabel="Próxima diferença" OnClick="DiffNextAsync" />
+                    </div>
+
+                    <div class="ide-df__group">
+                        <button class="ide-df__toggle @(_onlyDifferences ? "ide-df__toggle--active" : null)"
+                                title="Exibir apenas as diferenças (colapsa o que não mudou)"
+                                aria-label="Exibir apenas as diferenças"
+                                aria-pressed="@(_onlyDifferences ? "true" : "false")"
+                                @onclick="ToggleOnlyDifferencesAsync">apenas diferenças</button>
+                        <button class="ide-df__toggle @(_ignoreWhitespace ? "ide-df__toggle--active" : null)"
+                                title="Ignorar diferenças de espaços em branco"
+                                aria-label="Ignorar diferenças de espaços em branco"
+                                aria-pressed="@(_ignoreWhitespace ? "true" : "false")"
+                                @onclick="ToggleIgnoreWhitespaceAsync">ignorar espaços</button>
+                        <button class="ide-df__toggle @(_inline ? "ide-df__toggle--active" : null)"
+                                title="Exibir em uma única coluna (diff inline)"
+                                aria-label="Exibir em uma única coluna (diff inline)"
+                                aria-pressed="@(_inline ? "true" : "false")"
+                                @onclick="ToggleInlineAsync">inline</button>
+                        <button class="ide-df__toggle @(_wordWrap ? "ide-df__toggle--active" : null)"
+                                title="Quebrar linhas longas (word wrap)"
+                                aria-label="Quebrar linhas longas (word wrap)"
+                                aria-pressed="@(_wordWrap ? "true" : "false")"
+                                @onclick="ToggleWordWrapAsync">wrap</button>
+                        <button class="ide-df__toggle @(_minimap ? "ide-df__toggle--active" : null)"
+                                title="Mini-mapa de cada lado"
+                                aria-label="Mini-mapa de cada lado"
+                                aria-pressed="@(_minimap ? "true" : "false")"
+                                @onclick="ToggleMinimapAsync">minimapa</button>
+                        <button class="ide-df__toggle @(_overview ? "ide-df__toggle--active" : null)"
+                                title="Régua de diferenças (mini-mapa vertical do arquivo)"
+                                aria-label="Régua de diferenças"
+                                aria-pressed="@(_overview ? "true" : "false")"
+                                @onclick="ToggleOverviewAsync">régua</button>
+                    </div>
+
+                    <div class="ide-df__spacer"></div>
+
+                    <div class="ide-df__group">
+                        <XFButton Text="Copiar trecho" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" StartIcon="@Svg("copy")" OnClick="CopySelectedAsync" />
+                        @if (CanApply)
+                        {
+                            <XFButton Text="Reverter trecho" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Warning"
+                                      Size="XFExtendedSize.Sm" StartIcon="@Svg("arrow-rotate-left")"
+                                      OnClick="AskRevertHunkAsync" />
+                            <XFButton Text="Aplicar tudo" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Danger"
+                                      Size="XFExtendedSize.Sm" StartIcon="@Svg("check")" OnClick="AskApplyAllAsync" />
+                        }
+                    </div>
+                </div>
+
+                <div class="ide-df__monaco">
+                    <MonacoEditor @key="_diffKey" Id="@_diffId" Mode="diff"
+                                  Language="@DiffLanguage" Theme="@Theme.Current"
+                                  OriginalValue="@_left" Value="@_right" />
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <div class="ide-sx__empty">
+                    <span class="ide-sx__empty-icon">@((MarkupString)XFSvgIcons.Get("code-compare"))</span>
+                    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                        Compare duas versões de um arquivo. <b>Não salvas × disco</b> mostra as alterações
+                        pendentes do arquivo ativo (buffer do editor × disco) — o mesmo diff que o VS Code
+                        exibe antes de salvar. <b>Arquivo × vazio</b> realça tudo o que existe no arquivo e
+                        <b>Comparar com…</b> compara o arquivo ativo com outro do projeto.
+                    </XFTypography>
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+</XFStack>
+
+@* ============================================== modal: confirmar alteração de arquivo *@
+<ConfirmDialog Open="@_showConfirm" OpenChanged="OnConfirmChanged"
+               Title="@_confirmTitle"
+               ConfirmMessage="@_confirmMessage"
+               TargetName="@_confirmTarget"
+               ConfirmText="@_confirmText"
+               OnConfirm="RunConfirmAsync" />
+
+@code {
+    private static readonly (string Mode, string Label)[] Modes = new[]
+    {
+        ("files", "Dois arquivos"),
+        ("unsaved", "Não salvas × disco"),
+        ("blank", "Arquivo × vazio"),
+        ("compare", "Comparar com…"),
+    };
+
+    private string _mode = "files";
+    private string _leftPath = string.Empty;
+    private string _rightPath = string.Empty;
+    private string? _left;
+    private string? _right;
+    private string _leftName = string.Empty;
+    private string _rightName = string.Empty;
+    private bool _same;
+    private string? _error;
+
+    private int _diffCount;
+    private int _diffIndex = -1;
+
+    /// <summary>Caminho no disco do lado esquerdo (original); null no modo buffer.</summary>
+    private string? _leftTarget;
+
+    private bool _onlyDifferences;
+    private bool _ignoreWhitespace = true;
+    private bool _inline;
+    private bool _wordWrap;
+    private bool _minimap = true;
+    private bool _overview = true;
+
+    private bool _pendingOptions = true;
+    private string _diffId = NewContainerId();
+    private object _diffKey = Guid.NewGuid();
+
+    [Inject] private ThemeState Theme { get; set; } = default!;
+
+    protected override void OnInitialized()
+    {
+        // o editor (outra página do circuito) publica o buffer pendente: no modo
+        // "não salvas × disco" o diff acompanha sozinho
+        EditorState.Changed += OnEditorStateChanged;
+    }
+
+    private void OnEditorStateChanged()
+    {
+        if (_mode != "unsaved" || _left is null)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await CompareAsync();
+            }
+            catch (Exception)
+            {
+                // arquivo removido/renomeado: o erro aparece na barra do diff
+            }
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        EditorState.Changed -= OnEditorStateChanged;
+        await Task.CompletedTask;
+    }
+
+    private static string NewContainerId() => "ide-diff-" + Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>Id do container DOM criado pelo componente MonacoEditor.</summary>
+    private string MonacoId => "xf-monaco-" + _diffId;
+
+    private string? ActivePath => EditorState.ActiveFilePath ?? Ui.ActiveFilePath;
+    private string? ActivePending => EditorState.PendingContent ?? Ui.PendingContent;
+
+    private string ActiveLabel => ActivePath is null ? "nenhum arquivo ativo" : Path.GetFileName(ActivePath);
+    private string ActivePathLabel => ActivePath ?? "nenhum arquivo ativo no editor";
+    private string BufferLabel => ActivePath is null
+        ? "nenhum arquivo ativo no editor"
+        : (ActivePending is null
+            ? "(sem alterações pendentes) " + ActivePath
+            : "buffer do editor — " + ActivePath);
+    private string DiskLabel => ActivePath is null ? "—" : "disco — " + ActivePath;
+
+    /// <summary>Linguagem do Monaco a partir do lado esquerdo (o arquivo real).</summary>
+    private string DiffLanguage => LanguageFor(DiffLeftPath);
+
+    private string DiffLeftPath => _mode switch
+    {
+        "unsaved" => ActivePath ?? string.Empty,
+        "compare" => ActivePath ?? string.Empty,
+        _ => _leftPath,
+    };
+
+    /// <summary>Somente modos em que o lado esquerdo é um arquivo real no disco.</summary>
+    private bool CanApply => !string.IsNullOrWhiteSpace(_leftTarget);
+
+    private string Counter => _diffCount > 0
+        ? $"{Math.Clamp(_diffIndex + 1, 1, _diffCount)} de {_diffCount}"
+        : "sem diferenças";
+
+    private string BadgeText => _diffCount > 0
+        ? $"{_diffCount} {(_diffCount == 1 ? "diferença" : "diferenças")}"
+        : "idênticos";
+
+    private static string ShortName(string name) =>
+        string.IsNullOrEmpty(name) ? "—" : Path.GetFileName(name.Trim()) is { Length: > 0 } file ? file : name;
+
+    private static string ModeHint(string mode) => mode switch
+    {
+        "files" => "Comparar dois arquivos quaisquer do disco",
+        "unsaved" => "Buffer do editor ativo × arquivo no disco",
+        "blank" => "Comparar o arquivo com um conteúdo vazio",
+        "compare" => "Comparar o arquivo ativo com outro arquivo",
+        _ => string.Empty,
+    };
+
+    // ------------------------------------------------------------------ seleção
+
+    private Task OnLeftPathChangedAsync(string? value)
+    {
+        _leftPath = value ?? string.Empty;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OnRightPathChangedAsync(string? value)
+    {
+        _rightPath = value ?? string.Empty;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task SetModeAsync(string mode)
+    {
+        _mode = mode;
+        _left = null;
+        _right = null;
+        _error = null;
+        _diffCount = 0;
+        _diffIndex = -1;
+
+        var active = ActivePath;
+        switch (mode)
+        {
+            case "unsaved":
+                _leftPath = active ?? string.Empty;
+                _rightPath = active ?? string.Empty;
+                break;
+            case "blank":
+                _leftPath = active ?? string.Empty;
+                _rightPath = string.Empty;
+                break;
+            case "compare":
+                _leftPath = active ?? string.Empty;
+                _rightPath = string.Empty;
+                break;
+        }
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task CompareAsync()
+    {
+        _error = null;
+        string? left;
+        string? right;
+        string leftName;
+        string rightName;
+
+        var activePath = ActivePath;
+        var pending = ActivePending;
+
+        switch (_mode)
+        {
+            case "unsaved":
+                if (string.IsNullOrEmpty(activePath))
+                {
+                    _error = "Nenhum arquivo ativo no editor — abra um arquivo em /code.";
+                    return;
+                }
+                // buffer do editor (esquerda) × disco (direita)
+                left = pending ?? await Files.ReadAsync(activePath) ?? string.Empty;
+                right = await Files.ReadAsync(activePath) ?? string.Empty;
+                leftName = pending is null ? "(sem alterações pendentes) " + activePath : "não salvas (buffer) — " + activePath;
+                rightName = "disco — " + activePath;
+                _leftTarget = null; // o lado esquerdo é o buffer, não um arquivo
+                break;
+
+            case "blank":
+                if (string.IsNullOrWhiteSpace(_leftPath))
+                {
+                    _error = "Informe o caminho do arquivo.";
+                    return;
+                }
+                left = await Files.ReadAsync(_leftPath);
+                if (left is null)
+                {
+                    _error = "O arquivo não existe ou não pode ser lido.";
+                    return;
+                }
+                right = string.Empty;
+                leftName = _leftPath;
+                rightName = "(vazio)";
+                _leftTarget = _leftPath;
+                break;
+
+            case "compare":
+                if (string.IsNullOrEmpty(activePath))
+                {
+                    _error = "Abra um arquivo no editor para comparar com outro.";
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(_rightPath))
+                {
+                    _error = "Selecione o arquivo para comparar.";
+                    return;
+                }
+                left = await Files.ReadAsync(activePath) ?? string.Empty;
+                right = await Files.ReadAsync(_rightPath);
+                if (right is null)
+                {
+                    _error = "O arquivo comparado não existe ou não pode ser lido.";
+                    return;
+                }
+                leftName = activePath;
+                rightName = _rightPath;
+                _leftTarget = activePath;
+                break;
+
+            default:
+                if (string.IsNullOrWhiteSpace(_leftPath) || string.IsNullOrWhiteSpace(_rightPath))
+                {
+                    _error = "Informe os dois caminhos.";
+                    return;
+                }
+                left = await Files.ReadAsync(_leftPath);
+                right = await Files.ReadAsync(_rightPath);
+                if (left is null || right is null)
+                {
+                    _error = "Um dos arquivos não existe ou não pode ser lido.";
+                    return;
+                }
+                leftName = _leftPath;
+                rightName = _rightPath;
+                _leftTarget = _leftPath;
+                break;
+        }
+
+        _left = left;
+        _right = right;
+        _leftName = leftName;
+        _rightName = rightName;
+        _same = string.Equals(left, right, StringComparison.Ordinal);
+        NewDiffInstance();
+        Ui.SetStatus(_same
+            ? "Diff: os dois lados são idênticos"
+            : $"Diff: {Path.GetFileName(leftName)} × {Path.GetFileName(rightName)}");
+        StateHasChanged();
+    }
+
+    /// <summary>Id novo por comparação: recria o componente (e o DiffEditor do Monaco).</summary>
+    private void NewDiffInstance()
+    {
+        _diffId = NewContainerId();
+        _diffKey = Guid.NewGuid();
+        _diffCount = 0;
+        _diffIndex = -1;
+        _pendingOptions = true;
+    }
+
+    private Task SwapAsync()
+    {
+        if (_left is null || _right is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        (_left, _right) = (_right, _left);
+        (_leftName, _rightName) = (_rightName, _leftName);
+        (_leftPath, _rightPath) = (_rightPath, _leftPath);
+        _leftTarget = _mode == "compare"
+            ? _leftPath // no modo "comparar com" o alvo é sempre o arquivo da esquerda
+            : _leftTarget is null ? null : _leftPath;
+        NewDiffInstance();
+        Ui.SetStatus("Lados do diff trocados");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task ClearAsync()
+    {
+        _left = null;
+        _right = null;
+        _leftTarget = null;
+        _error = null;
+        _diffCount = 0;
+        _diffIndex = -1;
+        Ui.SetStatus("Diff limpo");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    // ------------------------------------------------------------- navegação
+
+    private async Task DiffNextAsync()
+    {
+        var state = await InvokeDiffAsync<DiffState?>("xfMonaco.diffNext");
+        ApplyState(state);
+        StateHasChanged();
+    }
+
+    private async Task DiffPrevAsync()
+    {
+        var state = await InvokeDiffAsync<DiffState?>("xfMonaco.diffPrev");
+        ApplyState(state);
+        StateHasChanged();
+    }
+
+    private async Task<T?> InvokeDiffAsync<T>(string function, params object[] args)
+    {
+        var payload = new object[] { MonacoId }.Concat(args).ToArray();
+        try
+        {
+            return await JS.InvokeAsync<T>(function, payload);
+        }
+        catch (JSDisconnectedException)
+        {
+            return default;
+        }
+        catch (JSException)
+        {
+            return default;
+        }
+        catch (InvalidOperationException)
+        {
+            return default;
+        }
+    }
+
+    private void ApplyState(DiffState? state)
+    {
+        if (state is null)
+        {
+            return;
+        }
+        _diffCount = state.Count;
+        _diffIndex = state.Count == 0 ? -1 : Math.Clamp(state.Index, 0, state.Count - 1);
+    }
+
+    // ------------------------------------------------------------ liga/desliga
+
+    private Task ToggleOnlyDifferencesAsync()
+    {
+        _onlyDifferences = !_onlyDifferences;
+        return ApplyDiffOptionsAsync();
+    }
+
+    private Task ToggleIgnoreWhitespaceAsync()
+    {
+        _ignoreWhitespace = !_ignoreWhitespace;
+        return ApplyDiffOptionsAsync();
+    }
+
+    private Task ToggleInlineAsync()
+    {
+        _inline = !_inline;
+        return ApplyDiffOptionsAsync();
+    }
+
+    private Task ToggleWordWrapAsync()
+    {
+        _wordWrap = !_wordWrap;
+        return ApplyDiffOptionsAsync();
+    }
+
+    private Task ToggleMinimapAsync()
+    {
+        _minimap = !_minimap;
+        return ApplyDiffOptionsAsync();
+    }
+
+    private Task ToggleOverviewAsync()
+    {
+        _overview = !_overview;
+        return ApplyDiffOptionsAsync();
+    }
+
+    private async Task ApplyDiffOptionsAsync()
+    {
+        var state = await InvokeDiffAsync<DiffState?>("xfMonaco.diffOptions", new
+        {
+            onlyDifferences = _onlyDifferences,
+            ignoreWhitespace = _ignoreWhitespace,
+            inline = _inline,
+            wordWrap = _wordWrap,
+            minimap = _minimap,
+            overview = _overview,
+        });
+        ApplyState(state);
+        StateHasChanged();
+    }
+
+    /// <summary>Aplica as preferências sem bloquear o handler de render.</summary>
+    private Task ApplyDiffOptionsInBackgroundAsync()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await ApplyDiffOptionsAsync();
+            }
+            catch (Exception)
+            {
+                // circuito encerrado ou interop indisponível
+            }
+        });
+        return Task.CompletedTask;
+    }
+
+    private async Task RefreshDiffCountAsync()
+    {
+        var state = await InvokeDiffAsync<DiffState?>("xfMonaco.diffState");
+        ApplyState(state);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // o componente MonacoEditor cria o DiffEditor de forma assíncrona (AMD); as
+        // funções de interop aguardam a instância existir antes de aplicar as
+        // preferências e ler a contagem ("N de M")
+        if (_pendingOptions && _left is not null)
+        {
+            _pendingOptions = false;
+            _ = ApplyDiffOptionsInBackgroundAsync();
+        }
+        await Task.CompletedTask;
+    }
+
+    // ----------------------------------------------------------------- ações
+
+    private async Task CopySelectedAsync()
+    {
+        var text = await InvokeDiffAsync<string?>("xfMonaco.diffSelectedText");
+        if (string.IsNullOrEmpty(text))
+        {
+            Ui.SetStatus("Selecione um trecho em um dos lados do diff para copiar.");
+            StateHasChanged();
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Ui.SetStatus($"Trecho copiado ({text.Length} caracteres).");
+        }
+        catch (JSException)
+        {
+            _error = "Não foi possível acessar a área de transferência do navegador.";
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        StateHasChanged();
+    }
+
+    private async Task AskRevertHunkAsync()
+    {
+        var target = _leftTarget;
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            _error = "Este modo não permite alterar o arquivo original.";
+            return;
+        }
+
+        var info = await InvokeDiffAsync<DiffRevert?>("xfMonaco.diffRevertPreview");
+        if (info is null || info.Count == 0)
+        {
+            _error = "Nenhuma diferença disponível para reverter.";
+            StateHasChanged();
+            return;
+        }
+
+        var origin = info.OriginalEndLineNumber >= info.OriginalStartLineNumber
+            ? $"linhas {info.OriginalStartLineNumber}-{info.OriginalEndLineNumber}"
+            : $"inserção antes da linha {info.OriginalStartLineNumber}";
+        Confirm("Reverter trecho",
+            $"O trecho {info.Index + 1} de {info.Count} ({origin} do original, linhas {info.ModifiedStartLineNumber}-{info.ModifiedEndLineNumber} do modificado) será aplicado em:",
+            target,
+            "Reverter trecho",
+            () => ApplyRevertAsync(info, target));
+    }
+
+    private async Task ApplyRevertAsync(DiffRevert info, string target)
+    {
+        var ok = await Files.WriteAsync(target, info.Original);
+        if (!ok)
+        {
+            _error = "Falha ao escrever o arquivo original.";
+            StateHasChanged();
+            return;
+        }
+
+        Ui.SetStatus($"Trecho revertido em {Path.GetFileName(target)}");
+        await InvalidateRoslynAsync(target);
+        _error = null;
+        await CompareAsync();
+    }
+
+    private async Task AskApplyAllAsync()
+    {
+        var target = _leftTarget;
+        if (string.IsNullOrWhiteSpace(target) || _right is null)
+        {
+            _error = "Este modo não permite aplicar o lado modificado.";
+            return;
+        }
+
+        Confirm("Aplicar tudo do modificado",
+            $"O conteúdo do lado modificado será copiado por cima do original ({_diffCount} diferença(s)). Não há desfazer na IDE — use o Git para voltar atrás.",
+            target,
+            "Aplicar tudo",
+            () => ApplyAllAsync(target));
+    }
+
+    private async Task ApplyAllAsync(string target)
+    {
+        if (_right is null)
+        {
+            return;
+        }
+
+        var ok = await Files.WriteAsync(target, _right);
+        if (!ok)
+        {
+            _error = "Falha ao escrever o arquivo original.";
+            StateHasChanged();
+            return;
+        }
+
+        Ui.SetStatus($"Modificado aplicado em {Path.GetFileName(target)}");
+        await InvalidateRoslynAsync(target);
+        _error = null;
+        await CompareAsync();
+    }
+
+    /// <summary>Invalida o cache do Roslyn para reindexar o arquivo alterado.</summary>
+    private async Task InvalidateRoslynAsync(string path)
+    {
+        var root = Ui.CurrentProject?.Path;
+        if (string.IsNullOrEmpty(root) || !path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        try
+        {
+            await JS.InvokeVoidAsync("xfIntellisense.invalidate", root);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    // ------------------------------------------------------------------ modal
+
+    private bool _showConfirm;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string? _confirmTarget;
+    private string _confirmText = "Confirmar";
+    private Func<Task>? _confirmAction;
+
+    private void Confirm(string title, string message, string? target, string confirmText, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmTarget = target;
+        _confirmText = confirmText;
+        _confirmAction = action;
+        _showConfirm = true;
+        StateHasChanged();
+    }
+
+    private Task OnConfirmChanged(bool open)
+    {
+        _showConfirm = open;
+        if (!open)
+        {
+            _confirmAction = null;
+        }
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task RunConfirmAsync()
+    {
+        var action = _confirmAction;
+        _confirmAction = null;
+        _showConfirm = false;
+        if (action is not null)
+        {
+            await action();
+        }
+        StateHasChanged();
+    }
+
+    // --------------------------------------------------------------- utilidades
+
+    private static RenderFragment Svg(string name) => builder =>
+    {
+        var svg = XFSvgIcons.Get(name);
+        if (!string.IsNullOrEmpty(svg))
+        {
+            builder.AddMarkupContent(0, svg);
+        }
+    };
+
+    private static string LanguageFor(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "plaintext";
+        }
+
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" or ".csproj" or ".props" => "csharp",
+            ".razor" => "razor",
+            ".json" => "json",
+            ".ts" => "typescript",
+            ".js" => "javascript",
+            ".md" => "markdown",
+            ".html" or ".htm" => "html",
+            ".css" => "css",
+            ".sql" => "sql",
+            ".rs" => "rust",
+            ".xml" or ".config" => "xml",
+            _ => "plaintext",
+        };
+    }
+
+    /// <summary>Resposta do xfMonaco.diffState/Next/Prev: contagem e índice atual.</summary>
+    private sealed class DiffState
+    {
+        [JsonPropertyName("count")]
+        public int Count { get; set; }
+
+        [JsonPropertyName("index")]
+        public int Index { get; set; }
+    }
+
+    /// <summary>Resposta do xfMonaco.diffRevertPreview (trecho atual do diff).</summary>
+    private sealed class DiffRevert
+    {
+        [JsonPropertyName("count")]
+        public int Count { get; set; }
+
+        [JsonPropertyName("index")]
+        public int Index { get; set; }
+
+        [JsonPropertyName("originalStartLineNumber")]
+        public int OriginalStartLineNumber { get; set; }
+
+        [JsonPropertyName("originalEndLineNumber")]
+        public int OriginalEndLineNumber { get; set; }
+
+        [JsonPropertyName("modifiedStartLineNumber")]
+        public int ModifiedStartLineNumber { get; set; }
+
+        [JsonPropertyName("modifiedEndLineNumber")]
+        public int ModifiedEndLineNumber { get; set; }
+
+        [JsonPropertyName("original")]
+        public string Original { get; set; } = string.Empty;
+    }
+}

@@ -1,0 +1,1124 @@
+@page "/code"
+@rendermode InteractiveServer
+@using Microsoft.JSInterop
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Components
+@using XForge.Ide.App.Services
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Components.Icon
+@using XForge.DesignSystem.Components.Typography
+@inject FileSystemService Files
+@inject ThemeState Theme
+@inject IdeUiState Ui
+@inject IdeOutputService Output
+@inject IdeEditorState EditorState
+@inject IIdeSessionStore IdeSession
+@inject NavigationManager Nav
+@inject XForge.Ide.Application.Services.ProjectService Projects
+@implements IAsyncDisposable
+
+<PageTitle>XForge IDE — Editor de Código</PageTitle>
+
+<XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold" Class="sr-only">Editor de Código</XFTypography>
+
+@* ==================== grade: Explorer | Editor + painel | Assistente ==================== *@
+@* -------------------------------------------------- Quick Open (Ctrl+P) *@
+@if (_showQuickOpen)
+{
+    <div class="ide-quickopen" @onclick="CloseQuickOpen">
+        <div class="ide-quickopen__box" @onclick:stopPropagation="true">
+            <input class="ide-quickopen__input"
+                   placeholder="Ir para o arquivo…"
+                   aria-label="Ir para o arquivo"
+                   @bind="_quickFilter"
+                   @bind:event="oninput"
+                   @onkeydown="OnQuickOpenKeyDown" />
+            <div class="ide-quickopen__list" role="listbox" aria-label="Arquivos encontrados">
+                @{
+                    var matches = FilterFiles(_quickFilter).Take(50).ToList();
+                }
+                @if (matches.Count == 0)
+                {
+                    <div class="ide-quickopen__empty">Nenhum arquivo encontrado</div>
+                }
+                @foreach (var (file, index) in matches.Select((f, i) => (f, i)))
+                {
+                    <button class="ide-quickopen__item @(index == _quickIndex ? "ide-quickopen__item--active" : null)"
+                            role="option"
+                            aria-selected="@(index == _quickIndex ? "true" : "false")"
+                            aria-label="@Rel(file)"
+                            @onclick="() => QuickOpenAsync(file)">
+                        <span class="ide-tree__fileicon">@((MarkupString)XFSvgIcons.Get(FileIcon(Path.GetFileName(file))))</span>
+                        <span class="ide-quickopen__path">@Rel(file)</span>
+                    </button>
+                }
+            </div>
+            <div class="ide-quickopen__footer">
+                <span><b>↑↓</b> navegar</span>
+                <span><b>Enter</b> abrir</span>
+                <span><b>Esc</b> fechar</span>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="ide-code-grid">
+
+    @* ----------------------------------------------------------- Explorer *@
+    <aside class="ide-explorer" aria-label="Explorer de arquivos">
+        @* arquivos abertos (acesso rápido, como no VS Code) *@
+        @if (_fileTabs.Count > 0)
+        {
+            <div class="ide-panel__section">
+                <button class="ide-panel__collapse"
+                        title="Expandir/recolher"
+                        aria-label="Expandir ou recolher abertos"
+                        @onclick="() => { _openEditorsCollapsed = !_openEditorsCollapsed; StateHasChanged(); }">
+                    <span class="ide-tree__chevron">@((MarkupString)XFSvgIcons.Get(_openEditorsCollapsed ? "chevron-right" : "chevron-down"))</span>
+                    <XFTypography Variant="XFTypographyVariant.Overline" Weight="XFTypographyWeight.Semibold" Color="XFTypographyColor.Muted">Abertos</XFTypography>
+                </button>
+                @if (!_openEditorsCollapsed)
+                {
+                    <div class="ide-panel__section-body">
+                        @foreach (var tab in _fileTabs)
+                        {
+                            <button class="ide-tree__item ide-tree__item--open-editor @(tab.IsActive ? "ide-tree__item--active" : null)"
+                                    title="@tab.Path"
+                                    @onclick="() => ActivateTabAsync(tab)">
+                                <span class="ide-tree__fileicon">@((MarkupString)XFSvgIcons.Get(FileIcon(tab.Title)))</span>
+                                <span class="ide-tree__label">@tab.Title</span>
+                                @if (tab.Dirty)
+                                {
+                                    <span class="ide-tree__dirty" title="Alterações não salvas"></span>
+                                }
+                            </button>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @* árvore do projeto *@
+        <div class="ide-panel__section ide-panel__section--grow">
+            <div class="ide-panel__section">
+                <button class="ide-panel__collapse"
+                        title="Expandir/recolher"
+                        aria-label="Expandir ou recolher projeto"
+                        @onclick="() => { _projectCollapsed = !_projectCollapsed; StateHasChanged(); }">
+                    <span class="ide-tree__chevron">@((MarkupString)XFSvgIcons.Get(_projectCollapsed ? "chevron-right" : "chevron-down"))</span>
+                    <XFTypography Variant="XFTypographyVariant.Overline" Weight="XFTypographyWeight.Semibold" Color="XFTypographyColor.Muted">
+                        @(Ui.CurrentProject?.Name ?? "Projeto")
+                    </XFTypography>
+                </button>
+                <XFButton Text="Recarregar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                          OnClick="ReloadTreeAsync" />
+            </div>
+            @if (!_projectCollapsed)
+            {
+                <div class="ide-panel__section-body">
+                    @if (_rootNodes.Count == 0)
+                    {
+                        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                            @(Ui.CurrentProject is null
+                                ? "Abra um projeto para explorar arquivos."
+                                : "O diretório do projeto está vazio.")
+                        </XFTypography>
+                    }
+                    else
+                    {
+                        <div class="ide-tree" role="tree" aria-label="Arquivos do projeto">
+                            @foreach (var node in _rootNodes)
+                            {
+                                @RenderNode(node)
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </aside>
+
+    @* ---------------------------------------------- editor + terminal/saída *@
+    <section class="ide-editor-area" id="ide-editor-area" aria-label="Editor e terminal">
+
+        @* abas dos ARQUIVOS (terminais ficam no painel, como no VS Code) *@
+        <div class="ide-editor-area__tabbar">
+            <TabBar Tabs="_fileTabs"
+                    OnActivate="ActivateTabAsync"
+                    OnClose="CloseTabAsync"
+                    OnReorder="ReorderTabAsync">
+                <Footer>
+                    <button class="ide-icon-btn ide-tabbar__action"
+                            title="Novo terminal (Ctrl+`)"
+                            aria-label="Novo terminal"
+                            @onclick="NewTerminalAsync">
+                        <span class="ide-icon-btn__icon">@((MarkupString)XFSvgIcons.Get("terminal"))</span>
+                    </button>
+                    <button class="ide-icon-btn ide-tabbar__action"
+                            title="Saída da IDE"
+                            aria-label="Saída da IDE"
+                            @onclick="ActivateOutputAsync">
+                        <span class="ide-icon-btn__icon">@((MarkupString)XFSvgIcons.Get("file-code"))</span>
+                    </button>
+                </Footer>
+            </TabBar>
+        </div>
+
+        @* editor *@
+        <div class="ide-editor-area__content">
+            @if (_activeTab is not null)
+            {
+                <MonacoEditor @ref="_monaco"
+                              Id="@_monacoId"
+                              Language="@_activeTab.Language"
+                              Theme="@Theme.Current"
+                              ProjectRoot="@WorkingDirectory"
+                              FilePath="@_activeTab.Path"
+                              Value="@_activeContent"
+                              ValueChanged="(string v) => OnEditorChangedAsync(v)"
+                              OnSave="(string v) => SaveActiveAsync(v)" />
+            }
+            else
+            {
+                <div class="ide-editor-empty">
+                    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                        Nenhum arquivo aberto. Selecione um arquivo no Explorer.
+                    </XFTypography>
+                </div>
+            }
+        </div>
+
+        @* divisor arrastável do painel inferior *@
+        @if (_panelOpen)
+        {
+            <div class="ide-panel-resizer" id="ide-panel-resizer"
+                 title="Arraste para redimensionar (duplo clique maximiza)"
+                 role="separator" aria-orientation="horizontal" aria-label="Redimensionar painel"></div>
+        }
+
+        @* --------------------------------------------- painel inferior *@
+        @if (_panelOpen)
+        {
+            <section class="ide-panel" aria-label="Painel inferior">
+                <div class="ide-panel__tabs" role="tablist" aria-label="Painel inferior">
+                    @foreach (var term in _terminals)
+                    {
+                        <button class="ide-panel__tab @(_panelPage == term.Id ? "ide-panel__tab--active" : null)"
+                                role="tab"
+                                aria-selected="@(_panelPage == term.Id ? "true" : "false")"
+                                title="@term.Title"
+                                @onclick="() => ActivateTerminalAsync(term.Id)">
+                            <span class="ide-panel__tab-icon">@((MarkupString)XFSvgIcons.Get("terminal"))</span>
+                            <span>@term.Title</span>
+                        </button>
+                    }
+                    <button class="ide-panel__tab @(_panelPage == "output" ? "ide-panel__tab--active" : null)"
+                            role="tab"
+                            aria-selected="@(_panelPage == "output" ? "true" : "false")"
+                            title="Saída da IDE"
+                            @onclick="() => ActivateOutputAsync()">
+                        <span class="ide-panel__tab-icon">@((MarkupString)XFSvgIcons.Get("file-code"))</span>
+                        <span>Saída</span>
+                    </button>
+
+                    <div class="ide-panel__tabs-spacer"></div>
+
+                    <button class="ide-icon-btn ide-panel__action" title="Novo terminal" aria-label="Novo terminal"
+                            @onclick="NewTerminalAsync">
+                        <span class="ide-icon-btn__icon">@((MarkupString)XFSvgIcons.Get("plus"))</span>
+                    </button>
+                    @if (_panelPage == "output")
+                    {
+                        <button class="ide-icon-btn ide-panel__action" title="Limpar saída" aria-label="Limpar saída"
+                                @onclick="AskClearOutputAsync">
+                            <span class="ide-icon-btn__icon">@((MarkupString)XFSvgIcons.Get("trash"))</span>
+                        </button>
+                    }
+                    <button class="ide-icon-btn ide-panel__action" title="Fechar painel" aria-label="Fechar painel"
+                            @onclick="ClosePanelAsync">
+                        <span class="ide-icon-btn__icon">@((MarkupString)XFSvgIcons.Get("xmark"))</span>
+                    </button>
+                </div>
+
+                <div class="ide-panel__body">
+                    @* terminais permanecem montados (scrollback e stream preservados) *@
+                    @foreach (var term in _terminals)
+                    {
+                        <div class="ide-panel__page @(_panelPage == term.Id ? null : "ide-pane--hidden")" @key="term.Id">
+                            <XForgeTerminal TerminalId="@term.Id" WorkingDirectory="@WorkingDirectory" />
+                        </div>
+                    }
+
+                    @if (_panelPage == "output")
+                    {
+                        <div class="ide-panel__page ide-output">
+                            @if (Output.Lines.Count == 0)
+                            {
+                                <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                                    Nenhuma saída registrada ainda.
+                                </XFTypography>
+                            }
+                            else
+                            {
+                                @foreach (var line in Output.Lines)
+                                {
+                                    <div class="ide-output__line">@line</div>
+                                }
+                            }
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+    </section>
+
+    @* ------------------------------------------------------- assistente IA *@
+    <aside class="ide-chat-aside" aria-label="Assistente de código">
+        <AiChatPanel ActiveFile="@_activeTab?.Path"
+                     ActiveFileContent="@_activeContent"
+                     SelectedText="null" />
+    </aside>
+</div>
+
+@* -------------------------------------------- confirmação: fechar aba não salva *@
+<ConfirmDialog Open="@_showCloseConfirm" OpenChanged="OnCloseConfirmChanged"
+               Title="Descartar alterações não salvas?"
+               ConfirmMessage="A aba selecionada possui alterações não salvas. Se continuar, as edições serão perdidas."
+               TargetName="@_closeTarget?.Title"
+               ConfirmText="Descartar e fechar"
+               OnConfirm="ConfirmCloseAsync" />
+
+@* ---------------------------------------------- confirmação: limpar saída da IDE *@
+<ConfirmDialog Open="@_showClearOutputConfirm" OpenChanged="OnClearOutputConfirmChanged"
+               Title="Limpar saída da IDE?"
+               ConfirmMessage="Todo o registro do painel Saída será removido desta sessão."
+               ConfirmText="Limpar saída"
+               OnConfirm="ConfirmClearOutputAsync" />
+
+@code {
+    private sealed class Node
+    {
+        public required string Name { get; init; }
+        public required string Path { get; init; }
+        public bool IsDirectory { get; init; }
+        public bool Expanded { get; set; }
+        public List<Node> Children { get; } = new();
+    }
+
+    private sealed class TerminalEntry
+    {
+        public required string Id { get; init; }
+        public required string Title { get; init; }
+    }
+
+    private readonly List<Node> _rootNodes = new();
+    private readonly List<TabBar.EditorTab> _tabs = new();
+    private readonly Dictionary<string, string> _pendingContents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<TerminalEntry> _terminals = new();
+    private TabBar.EditorTab? _activeTab;
+    private string _activeContent = string.Empty;
+    private string _monacoId = Guid.NewGuid().ToString("N")[..12];
+    private bool _suppressChange;
+    private MonacoEditor? _monaco;
+    private DotNetObjectReference<CodeOverview>? _self;
+    private bool _splitterAttached;
+
+    // ---- estado do painel inferior ------------------------------------------------
+    private bool _panelOpen;
+    private string _panelPage = "terminal"; // id do terminal ou "output"
+
+    // ---- seções do Explorer (recolhíveis, como no VS Code) ------------------------
+    private bool _openEditorsCollapsed;
+    private bool _projectCollapsed;
+
+    /// <summary>Linha a revelar após o próximo render (vinda da busca global).</summary>
+    private int? _pendingRevealLine;
+
+    // ---- Quick Open (Ctrl+P) --------------------------------------------------------
+    private bool _showQuickOpen;
+    private string _quickFilter = string.Empty;
+    private int _quickIndex;
+    private List<string> _allFiles = new();
+
+    // ---- confirmação de fechamento de aba com alterações ---------------------------
+    private bool _showCloseConfirm;
+    private TabBar.EditorTab? _closeTarget;
+    private bool _showClearOutputConfirm;
+
+    private IEnumerable<string> FilterFiles(string filter)
+    {
+        var all = _allFiles.AsEnumerable();
+        if (string.IsNullOrWhiteSpace(filter))
+        {
+            return all;
+        }
+        return all.Where(f => f.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                  .OrderBy(f => f.IndexOf(filter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string Rel(string path) =>
+        Ui.CurrentProject is { } p && path.StartsWith(p.Path, StringComparison.OrdinalIgnoreCase)
+            ? path[p.Path.Length..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            : path;
+
+    private void CloseQuickOpen()
+    {
+        _showQuickOpen = false;
+        _quickFilter = string.Empty;
+        _quickIndex = 0;
+    }
+
+    private async Task QuickOpenAsync(string path)
+    {
+        CloseQuickOpen();
+        await OpenFileAsync(path);
+    }
+
+    private Task OnQuickOpenKeyDown(KeyboardEventArgs e)
+    {
+        var count = FilterFiles(_quickFilter).Count();
+        switch (e.Key)
+        {
+            case "Escape":
+                CloseQuickOpen();
+                break;
+            case "ArrowDown":
+                _quickIndex = Math.Min(_quickIndex + 1, Math.Max(0, count - 1));
+                break;
+            case "ArrowUp":
+                _quickIndex = Math.Max(_quickIndex - 1, 0);
+                break;
+            case "Enter":
+                var pick = FilterFiles(_quickFilter).Skip(_quickIndex).FirstOrDefault();
+                if (pick is not null)
+                {
+                    return QuickOpenAsync(pick);
+                }
+                break;
+        }
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<TabBar.EditorTab> _fileTabs => _tabs.Where(t => t.Kind == "file").ToList();
+
+    private string WorkingDirectory => Ui.CurrentProject?.Path ?? ".";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Ui.Changed += OnUiStateChanged;
+        Output.Changed += OnOutputChanged;
+        _lastProjectId = Ui.CurrentProject?.Id;
+        if (Ui.CurrentProject is null)
+        {
+            var restored = await Ui.TryRestoreAsync(async id => await Projects.GetAsync(id));
+            if (!restored)
+            {
+                await ReloadTreeAsync();
+            }
+        }
+        else
+        {
+            await ReloadTreeAsync();
+        }
+
+        // aberto a partir da busca global: ?file=<caminho>&line=<n>
+        var uri = new Uri(Nav.Uri);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var file = query["file"];
+        var line = int.TryParse(query["line"], out var l) ? l : (int?)null;
+        if (!string.IsNullOrWhiteSpace(file))
+        {
+            await OpenFileAsync(file, line);
+        }
+        else
+        {
+            // restaura as abas da sessão anterior
+            await RestoreTabsAsync();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            try
+            {
+                await JS.InvokeVoidAsync("ideSplitter.register", _self);
+                await JS.InvokeVoidAsync("xfHotkeys.registerQuickOpen", _self);
+            }
+            catch (JSDisconnectedException)
+            {
+                return;
+            }
+        }
+
+        // o divisor só existe quando o painel está aberto — anexa ao abrir
+        if (_panelOpen && !_splitterAttached)
+        {
+            _splitterAttached = true;
+            try
+            {
+                await JS.InvokeVoidAsync("ideSplitter.attach", "ide-panel-resizer", "ide-editor-area");
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+        else if (!_panelOpen && _splitterAttached)
+        {
+            _splitterAttached = false;
+        }
+
+        // revela a linha pedida pela busca global (após o conteúdo estar aplicado)
+        if (_pendingRevealLine is > 0 && _monaco is not null)
+        {
+            var line = _pendingRevealLine.Value;
+            _pendingRevealLine = null;
+            try
+            {
+                await _monaco.RevealLineAsync(line);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Chamado pelo JS quando o usuário pressiona Ctrl+` (padrão VS Code).</summary>
+    [JSInvokable]
+    public Task TogglePanel()
+    {
+        if (_panelOpen)
+        {
+            ClosePanelAsync();
+        }
+        else
+        {
+            NewTerminalAsync();
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Chamado pelo JS quando o usuário pressiona Ctrl+P (quick open).</summary>
+    [JSInvokable]
+    public async Task ShowQuickOpen()
+    {
+        _allFiles = await CollectFilesAsync();
+        _quickFilter = string.Empty;
+        _quickIndex = 0;
+        _showQuickOpen = true;
+        StateHasChanged();
+    }
+
+    private async Task<List<string>> CollectFilesAsync()
+    {
+        var files = new List<string>();
+        if (Ui.CurrentProject is null)
+        {
+            return files;
+        }
+
+        async Task Walk(string dir)
+        {
+            var entries = await Files.ListAsync(dir);
+            foreach (var e in entries.Where(x => !x.Name.StartsWith(".") && x.Name is not ("bin" or "obj")))
+            {
+                if (e.IsDirectory)
+                {
+                    await Walk(e.Path);
+                }
+                else
+                {
+                    files.Add(e.Path);
+                }
+            }
+        }
+
+        await Walk(Ui.CurrentProject.Path);
+        return files;
+    }
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    private Guid? _lastProjectId;
+
+    /// <summary>Propaga abas/ativo/buffers para o estado compartilhado (Diff, Explorer).</summary>
+    private void SyncEditorState()
+    {
+        var tabs = _tabs.Where(t => t.Kind == "file").Select(t => new EditorTabState
+        {
+            Path = t.Path,
+            Title = t.Title,
+            Language = t.Language,
+            Dirty = t.Dirty,
+            Active = t == _activeTab,
+        });
+        EditorState.Sync(tabs, _activeTab?.Path, _activeTab?.Dirty ?? false);
+        _ = PersistTabsAsync();
+    }
+
+    private const string TabsStorageKey = "xf-editor-tabs";
+
+    /// <summary>Chave da sessão no banco: caminho do projeto aberto.</summary>
+    private string SessionKey => Ui.CurrentProject?.Path ?? ".";
+
+    /// <summary>
+    /// Salva a sessão no banco (SQLite) e mantém uma cópia em localStorage,
+    /// usada enquanto o circuito ainda não tem acesso ao banco.
+    /// </summary>
+    private async Task PersistTabsAsync()
+    {
+        var paths = _tabs.Where(t => t.Kind == "file").Select(t => t.Path).ToArray();
+        var active = _activeTab?.Path;
+        var height = _panelOpen ? await ReadPanelHeightAsync() : 240;
+
+        // 1) banco (fonte da verdade)
+        try
+        {
+            await IdeSession.SaveSessionAsync(SessionKey, new IdeSessionState(
+                paths, active, height, _panelOpen, _terminals.Count));
+        }
+        catch (Exception ex)
+        {
+            Output.Write("Sessão", "falha ao salvar no banco: " + ex.Message);
+        }
+
+        // 2) cache local (funciona antes do circuito interativo)
+        try
+        {
+            var state = new { active, paths };
+            await JS.InvokeVoidAsync("localStorage.setItem", TabsStorageKey,
+                System.Text.Json.JsonSerializer.Serialize(state));
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+            // pré-render: JS indisponível
+        }
+    }
+
+    /// <summary>Lê a altura atual do painel a partir da variável CSS definida pelo divisor.</summary>
+    private async Task<double> ReadPanelHeightAsync()
+    {
+        try
+        {
+            var value = await JS.InvokeAsync<string?>("eval",
+                "(function(){var e=document.querySelector('.ide-editor-area'); return e ? (e.style.getPropertyValue('--ide-panel-height') || '') : '';})()");
+            if (double.TryParse(value?.Replace("px", "", StringComparison.OrdinalIgnoreCase),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var px))
+            {
+                return px;
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        return 240;
+    }
+
+    /// <summary>Restaura a sessão anterior (banco → fallback localStorage).</summary>
+    private async Task RestoreTabsAsync()
+    {
+        string[]? paths = null;
+        string? active = null;
+
+        // 1) tenta o banco
+        try
+        {
+            var session = await IdeSession.GetSessionAsync(SessionKey);
+            if (session.Tabs.Count > 0)
+            {
+                paths = session.Tabs.ToArray();
+                active = session.ActivePath;
+                _terminals.Clear();
+                for (var i = 0; i < Math.Max(0, session.TerminalCount); i++)
+                {
+                    NewTerminalEntry();
+                }
+                if (_terminals.Count > 0)
+                {
+                    _panelOpen = session.PanelOpen;
+                    _panelPage = _terminals[0].Id;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // banco indisponível — cai para o cache local
+        }
+
+        // 2) fallback: localStorage
+        if (paths is null || paths.Length == 0)
+        {
+            try
+            {
+                var json = await JS.InvokeAsync<string?>("localStorage.getItem", TabsStorageKey);
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    var local = System.Text.Json.JsonSerializer.Deserialize<SavedTabs>(json);
+                    paths = local?.paths ?? Array.Empty<string>();
+                    active = local?.active;
+                }
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+                // pré-render: JS indisponível
+            }
+        }
+
+        if (paths is null || paths.Length == 0)
+        {
+            return;
+        }
+
+        foreach (var path in paths)
+        {
+            var existing = _tabs.FirstOrDefault(t => t.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+            {
+                continue;
+            }
+            if (await Files.ReadAsync(path) is null)
+            {
+                continue; // arquivo removido do disco
+            }
+            _tabs.Add(new TabBar.EditorTab
+            {
+                Id = Guid.NewGuid().ToString("N")[..12],
+                Title = Path.GetFileName(path),
+                Path = path,
+                Language = LanguageFor(path),
+                Icon = FileIcon(Path.GetFileName(path)),
+            });
+        }
+
+        var activeTab = active is null
+            ? null
+            : _tabs.FirstOrDefault(t => t.Path.Equals(active, StringComparison.OrdinalIgnoreCase));
+        if (activeTab is not null)
+        {
+            await ActivateTabAsync(activeTab);
+        }
+        StateHasChanged();
+    }
+
+    private void NewTerminalEntry()
+    {
+        var id = Guid.NewGuid().ToString("N")[..12];
+        _terminals.Add(new TerminalEntry { Id = id, Title = $"Terminal {_terminals.Count + 1}" });
+    }
+
+    private sealed class SavedTabs
+    {
+        // nomes devem bater com os do JSON salvo (System.Text.Json é case-sensitive)
+        public string? active { get; set; }
+        public string[]? paths { get; set; }
+    }
+
+
+    private void OnOutputChanged() => InvokeAsync(StateHasChanged);
+
+    private async void OnUiStateChanged()
+    {
+        var currentId = Ui.CurrentProject?.Id;
+        if (currentId == _lastProjectId)
+        {
+            return;
+        }
+        _lastProjectId = currentId;
+        await ReloadTreeAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ReloadTreeAsync()
+    {
+        _rootNodes.Clear();
+        if (Ui.CurrentProject is null)
+        {
+            return;
+        }
+
+        var entries = await Files.ListAsync(Ui.CurrentProject.Path);
+        foreach (var e in entries.Where(e => !e.Name.StartsWith(".") && e.Name is not ("bin" or "obj")))
+        {
+            _rootNodes.Add(new Node { Name = e.Name, Path = e.Path, IsDirectory = e.IsDirectory });
+        }
+    }
+
+    private RenderFragment RenderNode(Node node) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "ide-tree__node");
+
+        if (node.IsDirectory)
+        {
+            builder.OpenElement(seq++, "button");
+            builder.AddAttribute(seq++, "class", "ide-tree__item ide-tree__item--dir");
+            builder.AddAttribute(seq++, "role", "treeitem");
+            builder.AddAttribute(seq++, "aria-label", $"Pasta {node.Name}");
+            builder.AddAttribute(seq++, "aria-expanded", node.Expanded ? "true" : "false");
+            builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, async () =>
+            {
+                node.Expanded = !node.Expanded;
+                if (node.Expanded)
+                {
+                    node.Children.Clear();
+                    var entries = await Files.ListAsync(node.Path);
+                    foreach (var e in entries.Where(e => !e.Name.StartsWith(".") && e.Name is not ("bin" or "obj")))
+                    {
+                        node.Children.Add(new Node { Name = e.Name, Path = e.Path, IsDirectory = e.IsDirectory });
+                    }
+                }
+                StateHasChanged();
+            }));
+            builder.OpenElement(seq++, "span");
+            builder.AddAttribute(seq++, "class", "ide-tree__chevron");
+            builder.AddMarkupContent(seq++, node.Expanded ? XFSvgIcons.Get("chevron-down") : XFSvgIcons.Get("chevron-right"));
+            builder.CloseElement();
+            builder.OpenElement(seq++, "span");
+            builder.AddAttribute(seq++, "class", "ide-tree__folder");
+            builder.AddMarkupContent(seq++, XFSvgIcons.Get(node.Expanded ? "folder-open" : "folder"));
+            builder.CloseElement();
+            builder.AddContent(seq++, node.Name);
+            builder.CloseElement();
+
+            if (node.Expanded)
+            {
+                foreach (var child in node.Children)
+                {
+                    builder.AddContent(seq++, RenderNode(child));
+                }
+            }
+        }
+        else
+        {
+            builder.OpenElement(seq++, "button");
+            builder.AddAttribute(seq++, "class", "ide-tree__item ide-tree__item--file");
+            builder.AddAttribute(seq++, "role", "treeitem");
+            builder.AddAttribute(seq++, "aria-label", $"Arquivo {node.Name}");
+            builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, async () => await OpenFileAsync(node.Path)));
+            builder.OpenElement(seq++, "span");
+            builder.AddAttribute(seq++, "class", "ide-tree__fileicon");
+            builder.AddMarkupContent(seq++, XFSvgIcons.Get(FileIcon(node.Name)));
+            builder.CloseElement();
+            builder.AddContent(seq++, node.Name);
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    };
+
+    private async Task OpenFileAsync(string path, int? line = null)
+    {
+        var existing = _tabs.FirstOrDefault(t => t.Kind == "file" && t.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            await ActivateTabAsync(existing);
+        }
+        else
+        {
+            var content = await Files.ReadAsync(path) ?? string.Empty;
+            _pendingContents[path] = content;
+
+            var tab = new TabBar.EditorTab
+            {
+                Id = Guid.NewGuid().ToString("N")[..12],
+                Title = Path.GetFileName(path),
+                Path = path,
+                Language = LanguageFor(path),
+                IsActive = true,
+                Icon = FileIcon(Path.GetFileName(path)),
+            };
+
+            foreach (var t in _tabs)
+            {
+                t.IsActive = false;
+            }
+            _tabs.Add(tab);
+            _activeTab = tab;
+            _activeContent = content;
+            _suppressChange = true;
+            Ui.SetActiveFile(tab.Path, null);
+            EditorState.SetPending(tab.Path, null);
+            SyncEditorState();
+            Output.Write("Editor", $"Aberto: {tab.Title}");
+            StateHasChanged();
+        }
+
+        // posiciona o cursor na linha pedida (busca global) — aplicado no render
+        if (line is > 0)
+        {
+            _pendingRevealLine = line;
+            StateHasChanged(); // garante um render extra para revelar a linha
+        }
+    }
+
+    private async Task ActivateTabAsync(TabBar.EditorTab tab)
+    {
+        foreach (var t in _tabs)
+        {
+            t.IsActive = t == tab;
+        }
+        _activeTab = tab;
+
+        if (!_pendingContents.TryGetValue(tab.Path, out var content))
+        {
+            content = await Files.ReadAsync(tab.Path) ?? string.Empty;
+            _pendingContents[tab.Path] = content;
+        }
+        _activeContent = content;
+        _suppressChange = true; // consome o onDidChange do setValue (não marca dirty)
+        StateHasChanged();
+
+        if (_monaco is not null)
+        {
+            await _monaco.SetLanguageAsync(tab.Language);
+        }
+
+        SyncEditorState();
+    }
+
+    private Task OnEditorChangedAsync(string value)
+    {
+        if (_suppressChange)
+        {
+            _suppressChange = false;
+            return Task.CompletedTask;
+        }
+        if (_activeTab is not null)
+        {
+            _pendingContents[_activeTab.Path] = value;
+            _activeTab.Dirty = true;
+        }
+        _activeContent = value;
+        Ui.SetActiveFile(_activeTab?.Path, value);
+        if (_activeTab is not null)
+        {
+            EditorState.SetPending(_activeTab.Path, value);
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveActiveAsync(string value)
+    {
+        if (_activeTab is null)
+        {
+            return;
+        }
+        await Files.WriteAsync(_activeTab.Path, value);
+        _pendingContents[_activeTab.Path] = value;
+        _activeTab.Dirty = false;
+        Ui.SetStatus($"Salvo: {_activeTab.Title}");
+        Output.Write("Editor", $"Salvo: {_activeTab.Path}");
+        EditorState.SetPending(_activeTab.Path, null);
+        SyncEditorState();
+        try
+        {
+            // o Roslyn precisa reindexar o arquivo salvo
+            await JS.InvokeVoidAsync("xfIntellisense.invalidate", WorkingDirectory);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        StateHasChanged();
+    }
+
+    private async Task CloseTabAsync(TabBar.EditorTab tab)
+    {
+        if (tab.Dirty)
+        {
+            _closeTarget = tab;
+            _showCloseConfirm = true;
+            StateHasChanged();
+            return;
+        }
+
+        await CloseTabCoreAsync(tab);
+    }
+
+    private Task OnCloseConfirmChanged(bool open)
+    {
+        _showCloseConfirm = open;
+        if (!open)
+        {
+            _closeTarget = null;
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmCloseAsync()
+    {
+        var tab = _closeTarget;
+        _closeTarget = null;
+        _showCloseConfirm = false;
+        if (tab is not null)
+        {
+            await CloseTabCoreAsync(tab);
+        }
+    }
+
+    private Task AskClearOutputAsync()
+    {
+        if (Output.Lines.Count == 0)
+        {
+            Ui.SetStatus("Saída já está vazia");
+            return Task.CompletedTask;
+        }
+
+        _showClearOutputConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnClearOutputConfirmChanged(bool open)
+    {
+        _showClearOutputConfirm = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmClearOutputAsync()
+    {
+        _showClearOutputConfirm = false;
+        Output.Clear();
+        Ui.SetStatus("Saída da IDE limpa");
+        await Task.CompletedTask;
+    }
+
+    private async Task CloseTabCoreAsync(TabBar.EditorTab tab)
+    {
+        _pendingContents.Remove(tab.Path);
+        EditorState.Close(tab.Path);
+        SyncEditorState();
+        var index = _tabs.IndexOf(tab);
+        _tabs.Remove(tab);
+
+        if (tab.IsActive && _tabs.Count > 0)
+        {
+            var next = _tabs[Math.Clamp(index - 1, 0, _tabs.Count - 1)];
+            await ActivateTabAsync(next);
+        }
+        else if (_tabs.Count == 0)
+        {
+            _activeTab = null;
+            _activeContent = string.Empty;
+        }
+        StateHasChanged();
+    }
+
+    private async Task ReorderTabAsync(TabBar.TabReorderRequest request)
+    {
+        if (request.From < 0 || request.From >= _tabs.Count)
+        {
+            return;
+        }
+
+        var tab = _tabs[request.From];
+        _tabs.RemoveAt(request.From);
+
+        var to = Math.Clamp(request.To, 0, _tabs.Count);
+        _tabs.Insert(to, tab);
+
+        foreach (var t in _tabs)
+        {
+            t.IsActive = t == tab;
+        }
+        _activeTab = tab;
+        SyncEditorState();
+        StateHasChanged();
+        await Task.CompletedTask;
+    }
+
+    // ---- painel inferior -----------------------------------------------------------
+
+    private Task NewTerminalAsync()
+    {
+        // reutiliza um terminal ocioso ou cria um novo (numera por posição, como o VS Code)
+        var id = Guid.NewGuid().ToString("N")[..12];
+        var entry = new TerminalEntry { Id = id, Title = $"Terminal {_terminals.Count + 1}" };
+        _terminals.Add(entry);
+        _panelOpen = true;
+        _panelPage = id;
+        Output.Write("Terminal", $"{entry.Title} aberto em {WorkingDirectory}");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task ActivateTerminalAsync(string id)
+    {
+        _panelPage = id;
+        _panelOpen = true;
+        StateHasChanged();
+        try
+        {
+            // o painel estava oculto: reajusta o xterm ao tamanho real
+            await JS.InvokeVoidAsync("xfTerminal.refitAll");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private Task ActivateOutputAsync()
+    {
+        _panelPage = "output";
+        _panelOpen = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private void ClosePanelAsync()
+    {
+        _panelOpen = false;
+        StateHasChanged();
+    }
+
+    private static string FileIcon(string name)
+    {
+        var ext = Path.GetExtension(name).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" or ".csproj" or ".props" => "code",
+            ".razor" => "file-code",
+            ".json" => "file-code",
+            ".sql" => "database",
+            ".sln" => "folder-tree",
+            _ => "file",
+        };
+    }
+
+    private static string LanguageFor(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" => "csharp",
+            ".razor" => "razor",
+            ".json" => "json",
+            ".ts" => "typescript",
+            ".js" => "javascript",
+            ".md" => "markdown",
+            ".html" or ".htm" => "html",
+            ".css" => "css",
+            ".sql" => "sql",
+            ".rs" => "rust",
+            ".csproj" or ".props" or ".xml" or ".config" => "xml",
+            _ => "plaintext",
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Ui.Changed -= OnUiStateChanged;
+        Output.Changed -= OnOutputChanged;
+        _self?.Dispose();
+        await Task.CompletedTask;
+    }
+}

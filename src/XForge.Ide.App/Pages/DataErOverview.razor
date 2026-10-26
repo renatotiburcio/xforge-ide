@@ -1,0 +1,370 @@
+@page "/data/er"
+@rendermode InteractiveServer
+@using XForge.Ide.Application.Dto
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Components
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@inject DictionaryService Dictionaries
+@inject IdeUiState Ui
+
+<PageTitle>XForge IDE — Diagrama ER</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true">
+
+    @* ------------------------------------------------------------- cabeçalho *@
+    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center"
+             FullWidth="true" Wrap="XFWrap.Wrap">
+        <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Diagrama ER</XFTypography>
+        @foreach (var d in _dictionaries)
+        {
+            <XFButton Text="@d.Name"
+                      Variant="@(d.Id == _currentId ? XFButtonVariant.Solid : XFButtonVariant.Soft)"
+                      Color="@(d.Id == _currentId ? XFButtonColor.Primary : XFButtonColor.Secondary)"
+                      Size="XFExtendedSize.Sm"
+                      OnClick="() => LoadAsync(d.Id)" />
+        }
+        @if (_diagram is not null)
+        {
+            <XFButton Text="Recarregar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                      Size="XFExtendedSize.Sm" StartIcon="@IconReload"
+                      OnClick="RefreshAsync" />
+        }
+    </XFStack>
+
+    @* --------------------------------------------------- estados vazios/erro *@
+    @if (Ui.CurrentProject is null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Vertical" Gap="2">
+                    <XFTypography Variant="XFTypographyVariant.Subtitle2" Weight="XFTypographyWeight.Semibold">
+                        Nenhum projeto aberto
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                        Abra um projeto em <b>Projetos</b> para ver o diagrama do dicionário de dados.
+                    </XFTypography>
+                </XFStack>
+            </ChildContent>
+        </XFCard>
+    }
+    else if (_message is not null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Vertical" Gap="2">
+                    <XFTypography Variant="XFTypographyVariant.Subtitle2" Weight="XFTypographyWeight.Semibold">
+                        Diagrama indisponível
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">@_message</XFTypography>
+                </XFStack>
+            </ChildContent>
+        </XFCard>
+    }
+    else if (_diagram is not null)
+    {
+        @* --------------------------------------------------------- toolbar *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Sm">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center"
+                         Wrap="XFWrap.Wrap" FullWidth="true">
+
+                    @* zoom / encaixe *@
+                    <XFButton Class="ide-er-tool" Variant="XFButtonVariant.Outline" Color="XFButtonColor.Secondary"
+                              Size="XFExtendedSize.Sm" StartIcon="@IconZoomOut" Title="Afastar zoom"
+                              AriaLabel="Afastar zoom" OnClick="ZoomOutAsync" />
+                    <XFButton Class="ide-er-tool" Variant="XFButtonVariant.Outline" Color="XFButtonColor.Secondary"
+                              Size="XFExtendedSize.Sm" StartIcon="@IconZoomIn" Title="Aproximar zoom"
+                              AriaLabel="Aproximar zoom" OnClick="ZoomInAsync" />
+                    <XFTypography Class="ide-er__zoom" Variant="XFTypographyVariant.Body2"
+                                  Weight="XFTypographyWeight.Bold">@_zoom%</XFTypography>
+                    <XFButton Class="ide-er-tool" Text="Ajustar à tela" Variant="XFButtonVariant.Soft"
+                              Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm" StartIcon="@IconFit"
+                              OnClick="FitAsync" />
+                    <XFButton Class="ide-er-tool" Variant="XFButtonVariant.Ghost" Color="XFButtonColor.Secondary"
+                              Size="XFExtendedSize.Sm" StartIcon="@Icon100" Title="Zoom 100%"
+                              AriaLabel="Zoom 100%" OnClick="ResetZoomAsync" />
+                    <XFButton Class="ide-er-tool" Variant="XFButtonVariant.Ghost" Color="XFButtonColor.Secondary"
+                              Size="XFExtendedSize.Sm" StartIcon="@IconLayout" Title="Refazer layout automático"
+                              AriaLabel="Refazer layout automático" OnClick="ResetLayoutAsync" />
+
+                    <span class="ide-er__sep" aria-hidden="true"></span>
+
+                    @* contadores *@
+                    <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                        @_diagram.Nodes.Count entidades · @_diagram.Edges.Count relacionamentos
+                    </XFTypography>
+
+                    <span class="ide-er__sep" aria-hidden="true"></span>
+
+                    @* legenda de cardinalidade *@
+                    <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                        Cardinalidade
+                    </XFTypography>
+                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Size="XFBadgeSize.Sm"
+                             Dot="true" Text="1:1" />
+                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Primary" Size="XFBadgeSize.Sm"
+                             Dot="true" Text="1:N / N:1" />
+                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Warning" Size="XFBadgeSize.Sm"
+                             Dot="true" Text="N:N" />
+                </XFStack>
+            </ChildContent>
+        </XFCard>
+
+        @* -------------------------------------------------------- legenda de campos *@
+        <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center"
+                 Wrap="XFWrap.Wrap">
+            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Primary" Size="XFBadgeSize.Sm"
+                     StartIcon="@IconKey" Text="PK" />
+            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Secondary" Size="XFBadgeSize.Sm"
+                     StartIcon="@IconLink" Text="FK" />
+            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Danger" Size="XFBadgeSize.Sm"
+                     Text="* obrigatório" />
+            <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Subtle">
+                Arraste os nós para reorganizar · Ctrl + roda do mouse para zoom ·
+                duplo clique no fundo para ajustar à tela
+            </XFTypography>
+        </XFStack>
+
+        @* ------------------------------------------------------------- canvas *@
+        <ErDiagramCanvas @ref="_canvas"
+                         DictionaryId="@_currentId"
+                         Diagram="@_diagram"
+                         SelectionChanged="OnSelectionChanged"
+                         ZoomPercentChanged="OnZoomChanged" />
+
+        @* ----------------------------------------------------- foco da seleção *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center"
+                         Wrap="XFWrap.Wrap" FullWidth="true">
+                    <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">
+                        @(string.IsNullOrEmpty(_selection.Label) ? "Nada selecionado" : _selection.Label)
+                    </XFTypography>
+                    @if (_selection.NodeName is not null && _selection.EdgeId is null)
+                    {
+                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Size="XFBadgeSize.Sm"
+                                 Text="@($"{_selection.RelatedNodeNames.Count} conectadas")" />
+                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Primary" Size="XFBadgeSize.Sm"
+                                 Text="@($"{_selection.RelatedEdgeIds.Count} relacionamentos")" />
+                        <XFButton Text="Limpar seleção" Variant="XFButtonVariant.Ghost"
+                                  Color="XFButtonColor.Neutral" Size="XFExtendedSize.Sm"
+                                  StartIcon="@IconClose" OnClick="ClearSelectionAsync" />
+                    }
+                </XFStack>
+            </ChildContent>
+        </XFCard>
+
+        @* ------------------------------------------------------ relacionamentos *@
+        @if (_diagram.Edges.Count > 0)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+                <ChildContent>
+                    <XFStack Orientation="XFOrientation.Vertical" Gap="2" FullWidth="true">
+                        <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">
+                            Relacionamentos
+                        </XFTypography>
+                        <div class="ide-er__edge-list">
+                            @foreach (var e in _diagram.Edges)
+                            {
+                                var selected = _selection.EdgeId == e.Id;
+                                <button type="button"
+                                        class="ide-er__edge-row @(selected ? "is-selected" : null)"
+                                        @onclick="() => SelectEdgeAsync(e)">
+                                    <span class="ide-er__edge-name">@e.From</span>
+                                    <span class="ide-er__edge-badge @ToneClass(e.Cardinality)">@e.Cardinality</span>
+                                    <span class="ide-er__edge-name">@e.To</span>
+                                </button>
+                            }
+                        </div>
+                    </XFStack>
+                </ChildContent>
+            </XFCard>
+        }
+    }
+</XFStack>
+
+<ConfirmDialog Open="@_showResetLayoutConfirm" OpenChanged="OnResetLayoutConfirmChanged"
+               Title="Refazer layout automático?"
+               ConfirmMessage="As posições salvas dos nós serão descartadas e o layout será recalculado."
+               ConfirmText="Refazer layout"
+               OnConfirm="ConfirmResetLayoutAsync" />
+
+@code {
+    private IReadOnlyList<DictionaryDto> _dictionaries = Array.Empty<DictionaryDto>();
+    private ErDiagramDto? _diagram;
+    private Guid? _currentId;
+    private string? _message;
+    private int _zoom = 100;
+    private ErDiagramSelection _selection = ErDiagramSelection.Empty;
+    private ErDiagramCanvas? _canvas;
+    private bool _showResetLayoutConfirm;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Ui.Changed += OnUiStateChanged;
+        await ReloadAsync();
+    }
+
+    private Guid? _lastProjectId;
+
+    private void OnUiStateChanged()
+    {
+        var id = Ui.CurrentProject?.Id;
+        if (id == _lastProjectId)
+        {
+            InvokeAsync(StateHasChanged);
+            return;
+        }
+        _lastProjectId = id;
+        InvokeAsync(async () =>
+        {
+            await ReloadAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (Ui.CurrentProject is null)
+        {
+            _dictionaries = Array.Empty<DictionaryDto>();
+            _diagram = null;
+            _message = null;
+            return;
+        }
+
+        _dictionaries = await Dictionaries.ListByProjectAsync(Ui.CurrentProject.Id);
+        if (_dictionaries.Count > 0)
+        {
+            await LoadAsync(_dictionaries[0].Id);
+        }
+        else
+        {
+            _diagram = null;
+            _message = "Nenhum dicionário neste projeto. Crie um em Designer de Dados.";
+        }
+    }
+
+    private async Task LoadAsync(Guid dictionaryId)
+    {
+        _currentId = dictionaryId;
+        _message = null;
+        var diagram = await Dictionaries.GetErDiagramAsync(dictionaryId);
+        _diagram = diagram ?? new ErDiagramDto(Array.Empty<ErNodeDto>(), Array.Empty<ErEdgeDto>());
+        if (_diagram.Nodes.Count == 0)
+        {
+            _message = "Dicionário sem entidades.";
+        }
+        StateHasChanged();
+    }
+
+    private Task RefreshAsync() => _currentId is { } id ? LoadAsync(id) : Task.CompletedTask;
+
+    // ------------------------------------------------------------- toolbar
+
+    private Task ZoomInAsync() => _canvas?.ZoomInAsync() ?? Task.CompletedTask;
+
+    private Task ZoomOutAsync() => _canvas?.ZoomOutAsync() ?? Task.CompletedTask;
+
+    private Task FitAsync() => _canvas?.FitAsync() ?? Task.CompletedTask;
+
+    private Task ResetZoomAsync() => _canvas?.ResetZoomAsync() ?? Task.CompletedTask;
+
+    private Task ResetLayoutAsync()
+    {
+        _showResetLayoutConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnResetLayoutConfirmChanged(bool open)
+    {
+        _showResetLayoutConfirm = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmResetLayoutAsync()
+    {
+        _showResetLayoutConfirm = false;
+        if (_canvas is not null)
+        {
+            await _canvas.ResetLayoutAsync();
+        }
+    }
+
+    private Task ClearSelectionAsync() => SelectNodeAsync(null);
+
+    private async Task SelectEdgeAsync(ErEdgeDto edge)
+    {
+        await SelectEdgeByIdAsync(edge.Id);
+    }
+
+    private async Task SelectNodeAsync(string? nodeName)
+    {
+        if (_canvas is null)
+        {
+            _selection = ErDiagramSelection.Empty;
+            StateHasChanged();
+            return;
+        }
+
+        await _canvas.SelectNodeByNameAsync(nodeName);
+    }
+
+    private async Task SelectEdgeByIdAsync(Guid edgeId)
+    {
+        if (_canvas is null)
+        {
+            return;
+        }
+
+        await _canvas.SelectEdgeByIdAsync(edgeId);
+    }
+
+    private Task OnSelectionChanged(ErDiagramSelection selection)
+    {
+        _selection = selection;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OnZoomChanged(int percent)
+    {
+        _zoom = percent;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private static string ToneClass(string cardinality) => cardinality?.Trim() switch
+    {
+        "1:1" => "is-one",
+        "N:N" => "is-multi",
+        _ => "is-many"
+    };
+
+    // ---------------------------------------------------------------- ícones
+
+    private static RenderFragment ToolIcon(string name) => builder =>
+        builder.AddMarkupContent(0, XForge.DesignSystem.Components.Icon.XFSvgIcons.Get(name));
+
+    private static RenderFragment IconZoomIn => ToolIcon("plus");
+
+    private static RenderFragment IconZoomOut => ToolIcon("minus");
+
+    private static RenderFragment IconFit => ToolIcon("expand");
+
+    private static RenderFragment Icon100 => ToolIcon("compress");
+
+    private static RenderFragment IconLayout => ToolIcon("sitemap");
+
+    private static RenderFragment IconReload => ToolIcon("arrows-rotate");
+
+    private static RenderFragment IconKey => ToolIcon("key");
+
+    private static RenderFragment IconLink => ToolIcon("link");
+
+    private static RenderFragment IconClose => ToolIcon("xmark");
+}

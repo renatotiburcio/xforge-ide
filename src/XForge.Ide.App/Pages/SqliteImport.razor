@@ -1,0 +1,757 @@
+@page "/data/import"
+@rendermode InteractiveServer
+@using XForge.Ide.Application.Services
+@using XForge.Ide.Application.Dto
+@using XForge.Ide.Core.Results
+@using XForge.Ide.App.Components
+@using XForge.Ide.Core.Abstractions
+@using XForge.DesignSystem.Components.Icon
+@inject IDatabaseIntrospector Introspector
+@inject DictionaryService Dictionaries
+@inject IdeUiState Ui
+@inject XForge.Ide.Application.Services.ProjectService Projects
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>XForge IDE — Importar banco</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+
+    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center" Wrap="XFWrap.Wrap">
+        <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Importar banco (SQLite)</XFTypography>
+        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info"
+                  Text="@(Ui.CurrentProject is null ? "Sem projeto" : Ui.CurrentProject.Name)" />
+    </XFStack>
+
+    @if (Ui.CurrentProject is null)
+    {
+        @* ------------------------------------------------ estado: nenhum projeto aberto *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <div class="ide-imp__empty">
+                    <span class="ide-imp__empty-icon">@((MarkupString)XFSvgIcons.Get("database"))</span>
+                    <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                        Nenhum projeto aberto
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                        A engenharia reversa cria um dicionário de dados dentro de um projeto.
+                        Abra (ou crie) um projeto em <b>Projetos</b> para continuar.
+                    </XFTypography>
+                    <XFButton Text="Ir para Projetos" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              OnClick="GoToProjectsAsync">
+                        <StartIcon>
+                            <span class="ide-imp__btn-icon">@((MarkupString)XFSvgIcons.Get("arrow-right"))</span>
+                        </StartIcon>
+                    </XFButton>
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+            Engenharia reversa: lê <b>sqlite_master</b> e os PRAGMAs do banco e cria um dicionário com
+            entidades, campos e chaves primárias. O destino é o projeto <b>@Ui.CurrentProject.Name</b>.
+        </XFTypography>
+
+        @* ------------------------------------------------------------ passos 1..3 *@
+        <div class="ide-imp__steps">
+            @for (var i = 1; i <= 3; i++)
+            {
+                var step = i;
+                <div class="ide-imp__step @GetStepClass(step)" @onclick="() => GoToStepAsync(step)">
+                    <span class="ide-imp__step-num">
+                        @if (step < _step)
+                        {
+                            @((MarkupString)XFSvgIcons.Get("check"))
+                        }
+                        else
+                        {
+                            @step
+                        }
+                    </span>
+                    <span class="ide-imp__step-label">@StepTitle(step)</span>
+                </div>
+            }
+        </div>
+
+        @* ======================================================== PASSO 1 — Origem *@
+        @if (_step == 1)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+                <ChildContent>
+                    <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                        1. Origem dos dados
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="ide-imp__hint">
+                        Escolha um arquivo <code>.db</code>/<code>.sqlite</code> do disco ou informe uma
+                        connection string manual.
+                    </XFTypography>
+
+                    <div class="ide-imp__mode">
+                        <XFCombobox TItem="string" TValue="string" Label="Tipo de origem" Placeholder="Selecione"
+                                    Items="@_sourceModes" TextSelector="@(m => m)" ValueSelector="@(m => m)"
+                                    Value="@_sourceMode" ValueChanged="OnSourceModeChanged" />
+                    </div>
+
+                    @if (_sourceMode == FileMode)
+                    {
+                        <div class="ide-imp__grid">
+                            <PickerField Mode="file" Accept=".db,.sqlite,.sqlite3" Label="Arquivo .db *"
+                                         Placeholder="C:\dados\meubanco.db"
+                                         RecentKey="xf-recent-dbfiles"
+                                         Value="@_dbPath" ValueChanged="OnDbPathChanged" />
+                        </div>
+                        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                            Arquivos aceitos: .db, .sqlite, .sqlite3 — validação do cabeçalho
+                            "SQLite format 3" nos 16 primeiros bytes.
+                        </XFTypography>
+                    }
+                    else
+                    {
+                        <div class="ide-imp__grid">
+                            <XFTextInput Label="Connection string *" Placeholder="Data Source=C:\dados\meubanco.db"
+                                         Value="@_connString" ValueChanged="OnConnStringChanged" />
+                        </div>
+                        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                            Exemplo: <code>Data Source=C:\dados\meubanco.db</code>. Neste modo não há
+                            validação de cabeçalho — a conexão é testada ao clicar em <b>Conectar</b>.
+                        </XFTypography>
+                    }
+
+                    <div class="ide-imp__actions">
+                        <XFButton Text="Conectar e listar tabelas" Variant="XFButtonVariant.Solid"
+                                  Color="XFButtonColor.Primary" Loading="@_busy" OnClick="ConnectAsync">
+                            <StartIcon>
+                                <span class="ide-imp__btn-icon">@((MarkupString)XFSvgIcons.Get("refresh"))</span>
+                            </StartIcon>
+                        </XFButton>
+                    </div>
+                </ChildContent>
+            </XFCard>
+        }
+
+        @* ============================================ PASSO 2 — Tabelas e colunas *@
+        @if (_step == 2)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+                <ChildContent>
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center"
+                             Wrap="XFWrap.Wrap">
+                        <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                            2. Tabelas descobertas
+                        </XFTypography>
+                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info"
+                                  Text="@($"{_tables.Count} tabela(s) · {SelectedCount} selecionada(s)")" />
+                    </XFStack>
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="ide-imp__hint">
+                        Marque as tabelas que devem virar entidades do dicionário.
+                    </XFTypography>
+
+                    <div class="ide-imp__actions ide-imp__actions--tight">
+                        <XFButton Text="Selecionar todas" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="SelectAllAsync" />
+                        <XFButton Text="Desmarcar todas" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="SelectNoneAsync" />
+                        <XFButton Text="Voltar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Neutral"
+                                  Size="XFExtendedSize.Sm" OnClick="BackToStep1Async" />
+                    </div>
+
+                    @if (_tables.Count == 0)
+                    {
+                        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="mt-3">
+                            Nenhuma tabela encontrada no banco.
+                        </XFTypography>
+                    }
+                    else
+                    {
+                        <div class="ide-imp__tables mt-3">
+                            @foreach (var t in VisibleTables)
+                            {
+                                <div class="ide-imp__table-row">
+                                    <XFCheckbox FullWidth="false" Value="@t.Selected"
+                                                AriaLabel="@($"Selecionar {t.Name}")"
+                                                ValueChanged="(bool? v) => ToggleTable(t, v)" />
+                                    <span class="ide-imp__table-name">@t.Name</span>
+                                    <span class="ide-imp__table-meta">@t.Columns.Count coluna(s)</span>
+                                    <XFButton Text="Ver colunas" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                              Size="XFExtendedSize.Sm" OnClick="() => PreviewAsync(t)" />
+                                </div>
+                            }
+                        </div>
+
+                        <DataPager TotalItems="_tables.Count" Page="_tablePage" PageSize="PageSize"
+                                   PageChanged="OnTablePageChanged" />
+                    }
+
+                    @* preview das colunas da tabela selecionada *@
+                    @if (_previewTable is not null)
+                    {
+                        <div class="ide-imp__preview mt-4">
+                            <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                                Colunas de @_previewTable.Name
+                            </XFTypography>
+                            <XFTable Striped="true" Hoverable="true" Compact="true" Class="mt-2">
+                                <XFTableHeader>
+                                    <XFTableRow>
+                                        <XFTableCell Header="true">Nome</XFTableCell>
+                                        <XFTableCell Header="true">Tipo</XFTableCell>
+                                        <XFTableCell Header="true">Nullable</XFTableCell>
+                                        <XFTableCell Header="true">PK</XFTableCell>
+                                    </XFTableRow>
+                                </XFTableHeader>
+                                <XFTableBody>
+                                    @foreach (var c in VisiblePreviewColumns)
+                                    {
+                                        <XFTableRow>
+                                            <XFTableCell>@c.Name</XFTableCell>
+                                            <XFTableCell><span class="text-text-muted text-sm">@c.DbType</span></XFTableCell>
+                                            <XFTableCell>
+                                                @if (c.Required)
+                                                {
+                                                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Neutral" Text="NOT NULL" />
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-text-muted text-sm">sim</span>
+                                                }
+                                            </XFTableCell>
+                                            <XFTableCell>
+                                                @if (c.IsPrimaryKey)
+                                                {
+                                                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Primary" Text="PK" />
+                                                }
+                                            </XFTableCell>
+                                        </XFTableRow>
+                                    }
+                                </XFTableBody>
+                            </XFTable>
+
+                            <DataPager TotalItems="_previewTable.Columns.Count" Page="_previewPage" PageSize="PageSize"
+                                       PageChanged="OnPreviewPageChanged" />
+
+                            @if (_previewTable.Indexes.Count > 0)
+                            {
+                                <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted" Class="mt-2">
+                                    @_previewTable.Indexes.Count índice(s) também são importados como chaves.
+                                </XFTypography>
+                            }
+                        </div>
+                    }
+
+                    <div class="ide-imp__actions">
+                        <XFButton Text="Continuar para o destino" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                                  Disabled="@(SelectedCount == 0)" OnClick="GoToStep3Async">
+                            <StartIcon>
+                                <span class="ide-imp__btn-icon">@((MarkupString)XFSvgIcons.Get("arrow-right"))</span>
+                            </StartIcon>
+                        </XFButton>
+                    </div>
+                </ChildContent>
+            </XFCard>
+        }
+
+        @* ============================================ PASSO 3 — Destino e importação *@
+        @if (_step == 3)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+                <ChildContent>
+                    <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                        3. Dicionário de destino
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="ide-imp__hint">
+                        Serão criadas @SelectedCount entidade(s) no projeto <b>@Ui.CurrentProject.Name</b>:
+                        @string.Join(", ", _tables.Where(t => t.Selected).Select(t => t.Name))
+                    </XFTypography>
+
+                    <div class="ide-imp__grid">
+                        <XFTextInput Label="Nome do dicionário *" Placeholder="Importado"
+                                     Value="@_dictName" ValueChanged="OnDictNameChanged" />
+                    </div>
+
+                    <div class="ide-imp__actions ide-imp__actions--tight">
+                        <XFButton Text="Voltar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Neutral"
+                                  Size="XFExtendedSize.Sm" OnClick="BackToStep2Async" />
+                        <XFButton Text="@(_busy ? "Importando..." : "Importar")"
+                                  Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                                  Loading="@_busy" Disabled="@(SelectedCount == 0)" OnClick="ImportAsync">
+                            <StartIcon>
+                                <span class="ide-imp__btn-icon">@((MarkupString)XFSvgIcons.Get("upload"))</span>
+                            </StartIcon>
+                        </XFButton>
+                    </div>
+                </ChildContent>
+            </XFCard>
+        }
+
+        @* ------------------------------------------------------------- mensagens *@
+        @if (_message is not null)
+        {
+            <div class="ide-imp__msg @(_ok ? "ide-imp__msg--ok" : "ide-imp__msg--err")"
+                 role="@(_ok ? "status" : "alert")" aria-live="@(_ok ? "polite" : "assertive")">
+                <span class="ide-imp__msg-icon">
+                    @((MarkupString)XFSvgIcons.Get(_ok ? "check" : "xmark"))
+                </span>
+                <span>@_message</span>
+            </div>
+        }
+
+        @* --------------------------------------------- sucesso: link para o dicionário *@
+        @if (_ok && _createdDictionaryId is not null)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+                <ChildContent>
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center"
+                             Wrap="XFWrap.Wrap">
+                        <span class="ide-imp__ok-icon">@((MarkupString)XFSvgIcons.Get("check"))</span>
+                        <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                            Dicionário '@_createdDictionaryName' criado com @_createdEntityCount entidade(s).
+                        </XFTypography>
+                        <XFButton Text="Abrir no Data Designer" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                                  OnClick="OpenDictionaryAsync">
+                            <StartIcon>
+                                <span class="ide-imp__btn-icon">@((MarkupString)XFSvgIcons.Get("table-cells"))</span>
+                            </StartIcon>
+                        </XFButton>
+                        <XFButton Text="Importar outro banco" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  OnClick="RestartAsync" />
+                    </XFStack>
+                </ChildContent>
+            </XFCard>
+        }
+    }
+</XFStack>
+
+@code {
+    // ------------------------------------------------------------------ estado
+
+    private int _step = 1;
+
+    // Origem
+    private const string FileMode = "Arquivo .db / .sqlite";
+    private static readonly string[] _sourceModes = [FileMode, "Connection string manual"];
+    private string _sourceMode = FileMode;
+    private string _dbPath = string.Empty;
+    private string _connString = string.Empty;
+
+    // Tabelas descobertas
+    private sealed class TableRow
+    {
+        public required string Name { get; init; }
+        public required IReadOnlyList<InferredColumn> Columns { get; init; }
+        public required IReadOnlyList<(string Name, bool IsUnique, IReadOnlyList<string> Columns)> Indexes { get; init; }
+        public bool Selected { get; set; } = true;
+    }
+
+    private readonly List<TableRow> _tables = new();
+    private int _tablePage = 1;
+    private const int PageSize = 50;
+
+    private IEnumerable<TableRow> VisibleTables =>
+        _tables.Skip((_tablePage - 1) * PageSize).Take(PageSize);
+
+    private Task OnTablePageChanged(int page)
+    {
+        _tablePage = page;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private int _previewPage = 1;
+
+    private IEnumerable<XForge.Ide.Core.Abstractions.InferredColumn> VisiblePreviewColumns =>
+        (_previewTable?.Columns ?? Array.Empty<XForge.Ide.Core.Abstractions.InferredColumn>())
+            .Skip((_previewPage - 1) * PageSize).Take(PageSize);
+
+    private Task OnPreviewPageChanged(int page)
+    {
+        _previewPage = page;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+    private TableRow? _previewTable;
+
+    // Destino
+    private string _dictName = string.Empty;
+
+    // Execução
+    private bool _busy;
+    private bool _ok;
+    private string? _message;
+    private Guid? _createdDictionaryId;
+    private string? _createdDictionaryName;
+    private int _createdEntityCount;
+
+    private Guid? _lastProjectId;
+
+    private const string SqliteMagic = "SQLite format 3";
+
+    private int SelectedCount => _tables.Count(t => t.Selected);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Ui.Changed += OnUiStateChanged;
+        _lastProjectId = Ui.CurrentProject?.Id;
+        var restored = await ProjectRestorer.TryRestoreAsync(Ui, id => Projects.GetAsync(id));
+        if (restored || Ui.CurrentProject is not null)
+        {
+            // projeto disponível: o wizard começa no passo 1
+            _step = 1;
+        }
+    }
+
+    private async void OnUiStateChanged()
+    {
+        var currentId = Ui.CurrentProject?.Id;
+        if (currentId == _lastProjectId)
+        {
+            return;
+        }
+        _lastProjectId = currentId;
+        ResetWizard();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Ui.Changed -= OnUiStateChanged;
+    }
+
+    // ------------------------------------------------------------- navegação
+
+    private string StepTitle(int step) => step switch
+    {
+        1 => "Origem",
+        2 => "Tabelas",
+        3 => "Destino",
+        _ => string.Empty
+    };
+
+    private string GetStepClass(int step)
+    {
+        if (step < _step) return "ide-imp__step--done";
+        if (step == _step) return "ide-imp__step--active";
+        return "ide-imp__step--pending";
+    }
+
+    private Task GoToProjectsAsync()
+    {
+        Nav.NavigateTo("/projects");
+        return Task.CompletedTask;
+    }
+
+    private Task OpenDictionaryAsync()
+    {
+        Nav.NavigateTo("/data");
+        return Task.CompletedTask;
+    }
+
+    private void ResetWizard()
+    {
+        _step = 1;
+        _tables.Clear();
+        _previewTable = null;
+        _dictName = string.Empty;
+        _message = null;
+        _ok = false;
+        _createdDictionaryId = null;
+        _createdDictionaryName = null;
+        _createdEntityCount = 0;
+    }
+
+    private Task RestartAsync()
+    {
+        ResetWizard();
+        return Task.CompletedTask;
+    }
+
+    private Task GoToStepAsync(int step)
+    {
+        // Permite voltar a um passo já alcançado (não pula etapas).
+        if (step <= _step) _step = step;
+        return Task.CompletedTask;
+    }
+
+    private Task BackToStep1Async()
+    {
+        _step = 1;
+        return Task.CompletedTask;
+    }
+
+    private Task BackToStep2Async()
+    {
+        _step = 2;
+        return Task.CompletedTask;
+    }
+
+    private Task GoToStep3Async()
+    {
+        if (SelectedCount == 0)
+        {
+            _ok = false;
+            _message = "Selecione ao menos uma tabela para importar.";
+            return Task.CompletedTask;
+        }
+
+        // Sugere o nome do dicionário a partir do arquivo, na primeira vez.
+        if (string.IsNullOrWhiteSpace(_dictName))
+        {
+            var source = _sourceMode == FileMode ? _dbPath : _connString;
+            _dictName = SuggestDictionaryName(source);
+        }
+
+        _step = 3;
+        _message = null;
+        return Task.CompletedTask;
+    }
+
+    private static string SuggestDictionaryName(string source)
+    {
+        var trimmed = (source ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return "Importado";
+
+        // Extrai o nome do arquivo de "Data Source=<caminho>" ou de um caminho puro.
+        var value = trimmed;
+        var marker = "Data Source=";
+        var idx = value.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx >= 0)
+        {
+            value = value[(idx + marker.Length)..].Trim().Trim('"');
+        }
+
+        var name = Path.GetFileNameWithoutExtension(value.Replace('\\', '/').Split('/').LastOrDefault() ?? value);
+        return string.IsNullOrWhiteSpace(name) ? "Importado" : name;
+    }
+
+    // --------------------------------------------------------------- passo 1
+
+    private Task OnSourceModeChanged(string? value)
+    {
+        _sourceMode = value ?? FileMode;
+        _message = null;
+        return Task.CompletedTask;
+    }
+
+    private Task OnDbPathChanged(string? value)
+    {
+        _dbPath = value ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
+    private Task OnConnStringChanged(string? value)
+    {
+        _connString = value ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Valida a origem e conecta, descobrindo as tabelas do banco.</summary>
+    private async Task ConnectAsync()
+    {
+        if (Ui.CurrentProject is null) return;
+
+        _message = null;
+
+        var isFileMode = _sourceMode == FileMode;
+        var raw = isFileMode ? _dbPath.Trim() : _connString.Trim();
+
+        if (raw.Length == 0)
+        {
+            _ok = false;
+            _message = isFileMode
+                ? "Informe o caminho do arquivo .db."
+                : "Informe a connection string.";
+            return;
+        }
+
+        if (isFileMode && !System.IO.Path.IsPathFullyQualified(raw))
+        {
+            _ok = false;
+            _message = "Informe um caminho absoluto para o arquivo .db (ex.: C:\\dados\\meubanco.db).";
+            return;
+        }
+
+        // Validação do arquivo: existência + magic bytes "SQLite format 3" (16 primeiros bytes).
+        if (isFileMode)
+        {
+            var validation = ValidateSqliteFile(raw);
+            if (validation is not null)
+            {
+                _ok = false;
+                _message = validation;
+                return;
+            }
+        }
+
+        var connectionString = isFileMode ? "Data Source=" + raw : raw;
+
+        _busy = true;
+        try
+        {
+            var inferred = await Introspector.InferAsync(connectionString);
+            if (inferred.Count == 0)
+            {
+                _ok = false;
+                _message = "Nenhuma tabela encontrada no banco.";
+                _tables.Clear();
+                return;
+            }
+
+            _tables.Clear();
+            foreach (var t in inferred)
+            {
+                _tables.Add(new TableRow
+                {
+                    Name = t.Name,
+                    Columns = t.Columns,
+                    Indexes = t.Indexes,
+                    Selected = true
+                });
+            }
+
+            _previewTable = _tables[0];
+            _ok = true;
+            _tablePage = 1;
+            _previewPage = 1;
+            _message = $"{_tables.Count} tabela(s) descoberta(s). Selecione as que devem virar entidades.";
+            _step = 2;
+        }
+        catch (Exception ex)
+        {
+            _ok = false;
+            _message = "Falha ao conectar: " + ex.Message;
+            _tables.Clear();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// Valida existência e cabeçalho do arquivo SQLite.
+    /// Retorna a mensagem de erro ou null quando o arquivo é válido.
+    /// </summary>
+    private static string? ValidateSqliteFile(string path)
+    {
+        if (path.Length == 0) return "Informe o caminho do arquivo .db.";
+
+        if (!Path.IsPathRooted(path))
+        {
+            return $"Caminho deve ser absoluto: '{path}'.";
+        }
+
+        if (!System.IO.File.Exists(path))
+        {
+            return $"Arquivo não encontrado: {path}";
+        }
+
+        try
+        {
+            using var stream = System.IO.File.Open(path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite);
+            var header = new byte[16];
+            var read = stream.Read(header, 0, header.Length);
+            if (read < 16 || !System.Text.Encoding.ASCII.GetString(header).StartsWith(SqliteMagic, StringComparison.Ordinal))
+            {
+                return $"Arquivo inválido: '{path}' não é um banco SQLite (cabeçalho \"SQLite format 3\" não encontrado).";
+            }
+        }
+        catch (Exception ex)
+        {
+            return $"Não foi possível ler o arquivo: {ex.Message}";
+        }
+
+        return null;
+    }
+
+    // --------------------------------------------------------------- passo 2
+
+    private void ToggleTable(TableRow table, bool? value)
+    {
+        table.Selected = value ?? false;
+        _message = null;
+    }
+
+    private Task SelectAllAsync()
+    {
+        foreach (var t in _tables) t.Selected = true;
+        return Task.CompletedTask;
+    }
+
+    private Task SelectNoneAsync()
+    {
+        foreach (var t in _tables) t.Selected = false;
+        return Task.CompletedTask;
+    }
+
+    private Task PreviewAsync(TableRow table)
+    {
+        _previewTable = table;
+        _previewPage = 1;
+        return Task.CompletedTask;
+    }
+
+    // --------------------------------------------------------------- passo 3
+
+    private Task OnDictNameChanged(string? value)
+    {
+        _dictName = value ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Cria o dicionário com as tabelas selecionadas (SaveInferredAsync).</summary>
+    private async Task ImportAsync()
+    {
+        if (Ui.CurrentProject is null) return;
+
+        var name = _dictName.Trim();
+        if (name.Length == 0)
+        {
+            _ok = false;
+            _message = "Informe o nome do dicionário.";
+            return;
+        }
+
+        var selected = _tables.Where(t => t.Selected).ToArray();
+        if (selected.Length == 0)
+        {
+            _ok = false;
+            _message = "Selecione ao menos uma tabela para importar.";
+            return;
+        }
+
+        _busy = true;
+        _message = null;
+
+        try
+        {
+            var tables = selected
+                .Select(t => new InferredTable(t.Name, t.Columns, t.Indexes))
+                .ToArray();
+
+            var result = await Dictionaries.SaveInferredAsync(Ui.CurrentProject.Id, name, tables);
+            if (result.IsSuccess)
+            {
+                _ok = true;
+                _createdDictionaryId = result.Value.Id;
+                _createdDictionaryName = result.Value.Name;
+                _createdEntityCount = result.Value.EntityCount;
+                _message = $"Dicionário '{result.Value.Name}' criado com {result.Value.EntityCount} entidade(s).";
+                Ui.SetStatus($"Importado: {result.Value.Name}");
+            }
+            else
+            {
+                _ok = false;
+                _message = result.Error;
+            }
+        }
+        catch (Exception ex)
+        {
+            _ok = false;
+            _message = "Falha na importação: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

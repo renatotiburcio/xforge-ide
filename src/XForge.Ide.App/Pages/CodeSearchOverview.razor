@@ -1,0 +1,998 @@
+@page "/code/search"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
+@using System.Text
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Components
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.Forms.TextInput
+@using XForge.DesignSystem.Components.Forms.Checkbox
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@using XForge.DesignSystem.Components.Icon
+@inject SearchService Search
+@inject IdeUiState Ui
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>XForge IDE — Busca global</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true">
+    @* ----------------------------------------------------------- cabeçalho *@
+    <div class="ide-sx__head">
+        <div>
+            <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Busca global</XFTypography>
+            <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                Ctrl+Shift+F — resultados em tempo real, globs de inclusão/exclusão, prévia com o termo
+                destacado (todas as ocorrências da linha) e substituição em massa.
+            </XFTypography>
+        </div>
+        <div class="ide-sx__head-badges">
+            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Secondary"
+                      Text="@RootLabel" />
+            @if (_searching)
+            {
+                <span class="ide-sx__spinner" aria-hidden="true">@((MarkupString)XFSvgIcons.Get("spinner"))</span>
+                <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Secondary">buscando…</XFTypography>
+            }
+        </div>
+    </div>
+
+    @* --------------------------------------------------------------- filtros *@
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+        <ChildContent>
+            <div class="ide-sx__bar">
+                <XFTextInput Label="Pesquisar" Value="@_term" ValueChanged="OnTermChangedAsync"
+                             Placeholder="texto ou regex…" Type="XFTextInputType.Search"
+                             AriaLabel="Pesquisar" Immediate="true" DebounceMilliseconds="300" />
+                <XFTextInput Label="Incluir (glob)" Value="@_include" ValueChanged="OnIncludeChangedAsync"
+                             Placeholder="*.cs, src/**/*.razor" AriaLabel="Globs de inclusão"
+                             Immediate="true" DebounceMilliseconds="300" />
+                <XFTextInput Label="Excluir (glob)" Value="@_exclude" ValueChanged="OnExcludeChangedAsync"
+                             Placeholder="bin/**, obj/**" AriaLabel="Globs de exclusão"
+                             Immediate="true" DebounceMilliseconds="300" />
+            </div>
+
+            <div class="ide-sx__filters">
+                <XFCheckbox Label="Diferenciar maiúsc." Value="@_caseSensitive" ValueChanged="OnCaseChangedAsync" />
+                <XFCheckbox Label="Palavra inteira" Value="@_wholeWord" ValueChanged="OnWholeWordChangedAsync" />
+                <XFCheckbox Label="Regex" Value="@_regex" ValueChanged="OnRegexChangedAsync" />
+                <div class="ide-sx__filters-actions">
+                    <XFButton Text="Pesquisar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              Size="XFExtendedSize.Sm" StartIcon="@Svg("magnifying-glass")" OnClick="SearchNowAsync" />
+                    <XFButton Text="Limpar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                              Size="XFExtendedSize.Sm" StartIcon="@Svg("xmark")" OnClick="ClearAsync" />
+                </div>
+            </div>
+
+            @* presets de glob (um clique aplica o filtro) *@
+            <div class="ide-sx__presets">
+                <span class="ide-sx__preset-label">inclusão</span>
+                <div class="ide-sx__chips">
+                    @foreach (var preset in IncludePresets)
+                    {
+                        <button class="ide-sx__chip @(Matches(_include, preset) ? "ide-sx__chip--active" : null)"
+                                title="@($"Incluir {preset}")" aria-label="@($"Incluir {preset}")"
+                                @onclick="() => ApplyIncludeAsync(preset)">
+                            @preset
+                        </button>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_include))
+                    {
+                        <button class="ide-sx__chip ide-sx__chip--ghost" title="Remover o filtro de inclusão"
+                                aria-label="Remover o filtro de inclusão"
+                                @onclick="() => ApplyIncludeAsync(string.Empty)">
+                            sem filtro
+                        </button>
+                    }
+                </div>
+            </div>
+            <div class="ide-sx__presets">
+                <span class="ide-sx__preset-label">exclusão</span>
+                <div class="ide-sx__chips">
+                    @foreach (var preset in ExcludePresets)
+                    {
+                        <button class="ide-sx__chip @(Matches(_exclude, preset) ? "ide-sx__chip--active" : null)"
+                                title="@($"Excluir {preset}")" aria-label="@($"Excluir {preset}")"
+                                @onclick="() => ApplyExcludeAsync(preset)">
+                            @preset
+                        </button>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_exclude))
+                    {
+                        <button class="ide-sx__chip ide-sx__chip--ghost" title="Remover o filtro de exclusão"
+                                aria-label="Remover o filtro de exclusão"
+                                @onclick="() => ApplyExcludeAsync(string.Empty)">
+                            sem filtro
+                        </button>
+                    }
+                </div>
+            </div>
+
+            @* histórico das últimas buscas *@
+            @if (_history.Count > 0)
+            {
+                <div class="ide-sx__history">
+                    <span class="ide-sx__history-icon">@((MarkupString)XFSvgIcons.Get("clock-rotate-left"))</span>
+                    <XFTypography Variant="XFTypographyVariant.Overline" Weight="XFTypographyWeight.Semibold"
+                                  Color="XFTypographyColor.Muted">buscas recentes</XFTypography>
+                    <div class="ide-sx__chips">
+                        @foreach (var entry in _history)
+                        {
+                            <button class="ide-sx__chip ide-sx__chip--history" title="@entry.FilterLabel"
+                                    aria-label="@($"Busca recente {entry.Term}")"
+                                    @onclick="() => UseHistoryAsync(entry)">
+                                <span>@entry.Term</span>
+                                @if (entry.Regex)
+                                {
+                                    <span class="ide-sx__chip-flag">re</span>
+                                }
+                                @if (entry.CaseSensitive)
+                                {
+                                    <span class="ide-sx__chip-flag">Aa</span>
+                                }
+                                @if (entry.WholeWord)
+                                {
+                                    <span class="ide-sx__chip-flag">ab</span>
+                                }
+                            </button>
+                        }
+                    </div>
+                    <button class="ide-sx__chip ide-sx__chip--ghost" title="Limpar o histórico de buscas"
+                            aria-label="Limpar o histórico de buscas"
+                            @onclick="ClearHistoryAsync">limpar</button>
+                </div>
+            }
+
+            @* ------------------------------------------------------- substituição *@
+            @if (_showReplace)
+            {
+                <div class="ide-sx__replace">
+                    <XFTextInput Label="Substituir por" Value="@_replacement" ValueChanged="OnReplacementChangedAsync"
+                                 Placeholder="deixe vazio para remover o termo" AriaLabel="Substituir por"
+                                 Immediate="true" />
+                    <div class="ide-sx__replace-actions">
+                        <XFButton Text="Substituir em todos" Variant="XFButtonVariant.Solid"
+                                  Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                                  StartIcon="@Svg("arrows-rotate")" OnClick="AskReplaceAllAsync" />
+                        <XFButton Text="Fechar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="ToggleReplaceAsync" />
+                    </div>
+                </div>
+            }
+
+            @if (_regexError is not null)
+            {
+                <div class="ide-sx__alert" role="alert">
+                    <span class="ide-sx__alert-icon">@((MarkupString)XFSvgIcons.Get("circle-exclamation"))</span>
+                    <span>@_regexError</span>
+                </div>
+            }
+            else if (_error is not null)
+            {
+                <div class="ide-sx__alert" role="alert">
+                    <span class="ide-sx__alert-icon">@((MarkupString)XFSvgIcons.Get("circle-exclamation"))</span>
+                    <span>@_error</span>
+                </div>
+            }
+        </ChildContent>
+    </XFCard>
+
+    @* ------------------------------------------------------------ resultados *@
+    @if (_results.Count > 0)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <div class="ide-sx__summary">
+                    <div class="ide-sx__summary-title">
+                        <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">
+                            @_totalMatches @(_totalMatches == 1 ? "ocorrência" : "ocorrências") em @_results.Count @(_results.Count == 1 ? "arquivo" : "arquivos")
+                        </XFTypography>
+                        @if (_totalMatches >= Options.MaxResults)
+                        {
+                            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Warning"
+                                      Text="@($"limite de {Options.MaxResults} resultados")" />
+                        }
+                    </div>
+                    <div class="ide-sx__summary-actions">
+                        <XFButton Text="@(_sortByFile ? "Por arquivo" : "Por contagem")"
+                                  Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" StartIcon="@Svg(_sortByFile ? "sort" : "arrow-down-wide-short")"
+                                  OnClick="ToggleSortAsync" />
+                        <XFButton Text="Expandir" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="ExpandAllAsync" />
+                        <XFButton Text="Recolher" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="CollapseAllAsync" />
+                        <XFButton Text="Substituir" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Warning"
+                                  Size="XFExtendedSize.Sm" StartIcon="@Svg("arrows-rotate")"
+                                  OnClick="ToggleReplaceAsync" />
+                    </div>
+                </div>
+
+                <div class="ide-sx__results">
+                    @foreach (var file in VisibleResults)
+                    {
+                        <div class="ide-sx__file">
+                            <div class="ide-sx__file-head">
+                                <button class="ide-sx__chevron" title="Expandir ou recolher o arquivo"
+                                        aria-label="Expandir ou recolher @file.FileName"
+                                        @onclick="() => ToggleFileAsync(file)">
+                                    <span>@((MarkupString)XFSvgIcons.Get(_collapsed.Contains(file.FilePath) ? "chevron-right" : "chevron-down"))</span>
+                                </button>
+                                <button class="ide-sx__file-open" title="@file.FilePath"
+                                        aria-label="@($"Resultados de {file.FileName}")"
+                                        @onclick="() => ToggleFileAsync(file)">
+                                    <span class="ide-sx__file-name">@file.FileName</span>
+                                    <span class="ide-sx__file-path">@Rel(file.FilePath)</span>
+                                </button>
+                                <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Secondary"
+                                          Text="@file.Count.ToString()"
+                                          AriaLabel="@(file.Count + " ocorrências no arquivo")" />
+                                <button class="ide-sx__icon-btn" title="Substituir neste arquivo"
+                                        aria-label="Substituir em @file.FileName"
+                                        @onclick="() => AskReplaceFileAsync(file)">
+                                    <span>@((MarkupString)XFSvgIcons.Get("arrows-rotate"))</span>
+                                </button>
+                            </div>
+
+                            @if (!_collapsed.Contains(file.FilePath))
+                            {
+                                @foreach (var match in file.Matches)
+                                {
+                                    <button class="ide-sx__match" title="@($"Abrir {System.IO.Path.GetFileName(match.FilePath)} na linha {match.Line}")"
+                                            aria-label="@($"Abrir {System.IO.Path.GetFileName(match.FilePath)} na linha {match.Line}")"
+                                            @onclick="() => OpenAsync(match)">
+                                        <span class="ide-sx__match-line">@match.Line</span>
+                                        <span class="ide-sx__match-text">@((MarkupString)Highlight(match))</span>
+                                    </button>
+                                }
+                            }
+                        </div>
+                    }
+                </div>
+
+                <DataPager TotalItems="_results.Count" Page="_page" PageSize="PageSize"
+                           PageChanged="OnPageChanged" />
+            </ChildContent>
+        </XFCard>
+    }
+    else if (_searched)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <div class="ide-sx__empty">
+                    <span class="ide-sx__empty-icon">@((MarkupString)XFSvgIcons.Get("file-magnifying-glass"))</span>
+                    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                        Nenhum resultado para <b>@_term</b>@(string.IsNullOrWhiteSpace(_include) ? "" : " em " + _include + ".").
+                    </XFTypography>
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <div class="ide-sx__empty">
+                    <span class="ide-sx__empty-icon">@((MarkupString)XFSvgIcons.Get("magnifying-glass"))</span>
+                    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                        Pesquise em todos os arquivos do projeto. Use <b>*.cs</b> em Incluir, <b>!bin/**</b>
+                        em Excluir, ative <b>Regex</b> para padrões e <b>Substituir</b> para renomear em massa.
+                        Clique em um resultado para abrir o arquivo no editor, na linha.
+                    </XFTypography>
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+</XFStack>
+
+@* ==================================================== modal: confirmar substituição *@
+<ConfirmDialog Open="@_showConfirm" OpenChanged="OnConfirmChanged"
+               Title="@_confirmTitle"
+               ConfirmMessage="@_confirmMessage"
+               TargetName="@_confirmTarget"
+               ConfirmText="@_confirmText"
+               OnConfirm="RunConfirmAsync" />
+
+<ConfirmDialog Open="@_showClearHistoryConfirm" OpenChanged="OnClearHistoryConfirmChanged"
+               Title="Limpar histórico de buscas?"
+               ConfirmMessage="As buscas recentes serão removidas deste navegador."
+               ConfirmText="Limpar histórico"
+               OnConfirm="ConfirmClearHistoryAsync" />
+
+@code {
+    private readonly List<SearchFileResult> _results = new();
+    private int _page = 1;
+    private const int PageSize = 25;
+    private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<HistoryEntry> _history = new();
+
+    private string _term = string.Empty;
+    private string _include = string.Empty;
+    private string _exclude = string.Empty;
+    private string _replacement = string.Empty;
+    private bool _caseSensitive;
+    private bool _wholeWord;
+    private bool _regex;
+    private bool _showReplace;
+    private bool _searched;
+    private bool _searching;
+    private bool _sortByFile = true;
+    private int _totalMatches;
+    private string? _error;
+    private string? _regexError;
+    private CancellationTokenSource? _searchCts;
+    private CancellationTokenSource? _historyCts;
+    private int _searchSeq;
+
+    private const string HistoryKey = "xf-search-history";
+    private const int HistoryLimit = 8;
+    private const int HistoryDebounceMs = 700;
+
+    private static readonly string[] IncludePresets =
+    {
+        "*.cs", "*.razor", "*.json", "*.md", "src/**/*.cs", "**/*.razor",
+    };
+
+    private static readonly string[] ExcludePresets =
+    {
+        "bin/**", "obj/**", "node_modules/**", "wwwroot/lib/**", "**/*.min.js",
+    };
+
+    private string? _root => Ui.CurrentProject?.Path;
+    private string RootLabel => Ui.CurrentProject?.Name ?? "nenhum projeto";
+
+    private SearchOptions Options => new()
+    {
+        Term = _term,
+        CaseSensitive = _caseSensitive,
+        WholeWord = _wholeWord,
+        Regex = _regex,
+        Include = string.IsNullOrWhiteSpace(_include) ? null : _include,
+        Exclude = string.IsNullOrWhiteSpace(_exclude) ? null : _exclude,
+    };
+
+    /// <summary>Resultados na ordem escolhida (arquivo ou contagem), paginados.</summary>
+    private IEnumerable<SearchFileResult> VisibleResults => (_sortByFile
+        ? _results.OrderBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase)
+        : _results.OrderByDescending(r => r.Count)
+                   .ThenBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase))
+        .Skip((_page - 1) * PageSize).Take(PageSize);
+
+    private Task OnPageChanged(int page)
+    {
+        _page = page;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    // ------------------------------------------------------------------ filtros
+
+    private Task OnTermChangedAsync(string? value)
+    {
+        _term = value ?? string.Empty;
+        return RunSearchAsync();
+    }
+
+    private Task OnIncludeChangedAsync(string? value)
+    {
+        _include = value ?? string.Empty;
+        return RunSearchAsync();
+    }
+
+    private Task OnExcludeChangedAsync(string? value)
+    {
+        _exclude = value ?? string.Empty;
+        return RunSearchAsync();
+    }
+
+    private Task OnReplacementChangedAsync(string? value)
+    {
+        _replacement = value ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
+    private Task OnCaseChangedAsync(bool? value)
+    {
+        _caseSensitive = value ?? false;
+        return RunSearchAsync();
+    }
+
+    private Task OnWholeWordChangedAsync(bool? value)
+    {
+        _wholeWord = value ?? false;
+        return RunSearchAsync();
+    }
+
+    private Task OnRegexChangedAsync(bool? value)
+    {
+        _regex = value ?? false;
+        _regexError = _regex && _term.Length > 0 ? SearchService.ValidateRegex(_term) is { } invalid
+            ? "Regex inválida: " + invalid
+            : null
+            : null;
+        return RunSearchAsync();
+    }
+
+    private Task ApplyIncludeAsync(string preset)
+    {
+        _include = preset;
+        return RunSearchAsync();
+    }
+
+    private Task ApplyExcludeAsync(string preset)
+    {
+        _exclude = preset;
+        return RunSearchAsync();
+    }
+
+    private static bool Matches(string field, string preset) =>
+        field.Split(new[] { ',', ';' }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+             .Contains(preset, StringComparer.OrdinalIgnoreCase);
+
+    private Task ToggleSortAsync()
+    {
+        _sortByFile = !_sortByFile;
+        _page = 1;
+        Ui.SetStatus(_sortByFile ? "Resultados ordenados por arquivo" : "Resultados ordenados por contagem");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task ExpandAllAsync()
+    {
+        _collapsed.Clear();
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task CollapseAllAsync()
+    {
+        foreach (var file in _results)
+        {
+            _collapsed.Add(file.FilePath);
+        }
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task ToggleFileAsync(SearchFileResult file)
+    {
+        if (!_collapsed.Add(file.FilePath))
+        {
+            _collapsed.Remove(file.FilePath);
+        }
+        return Task.CompletedTask;
+    }
+
+    // -------------------------------------------------------------------- busca
+
+    private Task SearchNowAsync() => RunSearchAsync();
+
+    /// <summary>
+    /// Executa a busca (chamada a cada tecla com debounce de 300ms, pelo input).
+    /// Resultados de buscas anteriores são descartados.
+    /// </summary>
+    private async Task RunSearchAsync()
+    {
+        _error = null;
+        _page = 1;
+
+        if (_regex && _term.Length > 0 && SearchService.ValidateRegex(_term) is { } invalid)
+        {
+            _regexError = "Regex inválida: " + invalid;
+            _results.Clear();
+            _totalMatches = 0;
+            _searched = true;
+            StateHasChanged();
+            return;
+        }
+        _regexError = null;
+
+        if (string.IsNullOrWhiteSpace(_term) || _root is null)
+        {
+            _results.Clear();
+            _totalMatches = 0;
+            _searched = false;
+            _error = Ui.CurrentProject is null ? "Abra um projeto para buscar nos arquivos." : null;
+            StateHasChanged();
+            return;
+        }
+
+        var options = Options;
+        var version = ++_searchSeq;
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+        _searching = true;
+        StateHasChanged();
+
+        try
+        {
+            var results = await Search.SearchAsync(_root, options, cts.Token);
+            if (version != _searchSeq || cts.IsCancellationRequested)
+            {
+                return; // uma busca mais recente chegou primeiro
+            }
+
+            _results.Clear();
+            _results.AddRange(results);
+            _collapsed.Clear();
+            _totalMatches = _results.Sum(r => r.Count);
+            _searched = true;
+            _page = 1;
+            Ui.SetStatus($"Busca: {_totalMatches} ocorrências em {_results.Count} arquivos");
+
+            // grava o histórico só quando o termo "assenta" (debounce próprio)
+            _ = SaveHistoryDebouncedAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = "Falha ao pesquisar: " + ex.Message;
+        }
+        finally
+        {
+            if (version == _searchSeq)
+            {
+                _searching = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private Task ClearAsync()
+    {
+        _searchCts?.Cancel();
+        _results.Clear();
+        _collapsed.Clear();
+        _term = string.Empty;
+        _include = string.Empty;
+        _exclude = string.Empty;
+        _error = null;
+        _regexError = null;
+        _totalMatches = 0;
+        _searched = false;
+        _page = 1;
+        Ui.SetStatus("Busca limpa");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Abre o arquivo no editor, na linha encontrada (query params).</summary>
+    private void OpenAsync(SearchMatch match)
+    {
+        var url = "/code?file=" + Uri.EscapeDataString(match.FilePath) + "&line=" + match.Line;
+        Nav.NavigateTo(url);
+    }
+
+    // -------------------------------------------------------------- histórico
+
+    /// <summary>
+    /// Grava a busca no histórico com atraso (700ms): enquanto o usuário digita, a
+    /// gravação é reprogramada e apenas o termo final entra no histórico.
+    /// </summary>
+    private async Task SaveHistoryDebouncedAsync()
+    {
+        _historyCts?.Cancel();
+        _historyCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _historyCts = cts;
+        try
+        {
+            await Task.Delay(HistoryDebounceMs, cts.Token);
+            await SaveHistoryAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // o usuário continuou digitando: grava mais tarde
+        }
+    }
+
+    private HistoryEntry CurrentHistoryEntry() => new()
+    {
+        Term = _term.Trim(),
+        Include = _include.Trim(),
+        Exclude = _exclude.Trim(),
+        Regex = _regex,
+        CaseSensitive = _caseSensitive,
+        WholeWord = _wholeWord,
+    };
+
+    private async Task SaveHistoryAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_term))
+        {
+            return;
+        }
+
+        var entry = CurrentHistoryEntry();
+        _history.RemoveAll(h => h.Key == entry.Key);
+        _history.Insert(0, entry);
+        while (_history.Count > HistoryLimit)
+        {
+            _history.RemoveAt(_history.Count - 1);
+        }
+
+        var payload = _history
+            .Select(h => new
+            {
+                term = h.Term,
+                include = h.Include,
+                exclude = h.Exclude,
+                regex = h.Regex,
+                caseSensitive = h.CaseSensitive,
+                wholeWord = h.WholeWord,
+            })
+            .ToList();
+
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", HistoryKey, JsonSerializer.Serialize(payload));
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+            // pré-render: JS indisponível
+        }
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        List<HistoryEntry>? entries = null;
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", HistoryKey);
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                entries = JsonSerializer.Deserialize<List<HistoryEntry>>(json);
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (entries is null || entries.Count == 0)
+        {
+            return;
+        }
+
+        _history.Clear();
+        _history.AddRange(entries
+            .Where(e => !string.IsNullOrWhiteSpace(e.Term))
+            .DistinctBy(e => e.Key)
+            .Take(HistoryLimit));
+        StateHasChanged();
+    }
+
+    private async Task UseHistoryAsync(HistoryEntry entry)
+    {
+        _term = entry.Term;
+        _include = entry.Include ?? string.Empty;
+        _exclude = entry.Exclude ?? string.Empty;
+        _regex = entry.Regex;
+        _caseSensitive = entry.CaseSensitive;
+        _wholeWord = entry.WholeWord;
+        _regexError = null;
+        _error = null;
+        await RunSearchAsync();
+    }
+
+    private bool _showClearHistoryConfirm;
+
+    private Task ClearHistoryAsync()
+    {
+        _showClearHistoryConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnClearHistoryConfirmChanged(bool open)
+    {
+        _showClearHistoryConfirm = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmClearHistoryAsync()
+    {
+        _showClearHistoryConfirm = false;
+        _history.Clear();
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.removeItem", HistoryKey);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        Ui.SetStatus("Histórico de buscas limpo");
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadHistoryAsync();
+        }
+    }
+
+    // ------------------------------------------------------------ substituição
+
+    private Task ToggleReplaceAsync()
+    {
+        _showReplace = !_showReplace;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task AskReplaceFileAsync(SearchFileResult file)
+    {
+        var count = await SearchService.CountInFileAsync(file.FilePath, Options);
+        if (count <= 0)
+        {
+            _error = "Nenhuma ocorrência substituível neste arquivo.";
+            StateHasChanged();
+            return;
+        }
+
+        Confirm("Substituir neste arquivo",
+            $"{count} {(count == 1 ? "ocorrência" : "ocorrências")} de \"{_term}\" serão alteradas{EmptyNote}.",
+            file.FilePath,
+            "Substituir",
+            () => ReplaceInFileAsync(file));
+    }
+
+    private async Task AskReplaceAllAsync()
+    {
+        if (_results.Count == 0)
+        {
+            return;
+        }
+
+        var options = Options;
+        var total = 0;
+        foreach (var file in _results.ToArray())
+        {
+            total += await SearchService.CountInFileAsync(file.FilePath, options);
+        }
+        if (total <= 0)
+        {
+            _error = "Nenhuma ocorrência substituível nos arquivos listados.";
+            StateHasChanged();
+            return;
+        }
+
+        Confirm("Substituir em todos os arquivos",
+            $"{total} {(total == 1 ? "ocorrência" : "ocorrências")} de \"{_term}\" serão alteradas em {_results.Count} {(_results.Count == 1 ? "arquivo" : "arquivos")}{EmptyNote}.",
+            $"{_results.Count} {(_results.Count == 1 ? "arquivo" : "arquivos")} do projeto",
+            "Substituir tudo",
+            ReplaceAllAsync);
+    }
+
+    private string EmptyNote => string.IsNullOrEmpty(_replacement)
+        ? " (o termo será removido)"
+        : _regex ? " (a substituição é literal, sem referências de grupo)" : string.Empty;
+
+    private async Task ReplaceInFileAsync(SearchFileResult file)
+    {
+        var replaced = await Search.ReplaceInFileAsync(file.FilePath, Options, _replacement);
+        Ui.SetStatus($"Substituídas {replaced} ocorrências em {file.FileName}");
+        await InvalidateRoslynAsync();
+        await RunSearchAsync();
+    }
+
+    private async Task ReplaceAllAsync()
+    {
+        var replaced = 0;
+        var files = _results.ToArray();
+        foreach (var file in files)
+        {
+            replaced += await Search.ReplaceInFileAsync(file.FilePath, Options, _replacement);
+        }
+        Ui.SetStatus($"Substituídas {replaced} ocorrências em {files.Length} arquivos");
+        await InvalidateRoslynAsync();
+        await RunSearchAsync();
+    }
+
+    /// <summary>Invalida o cache do Roslyn para reindexar os arquivos alterados.</summary>
+    private async Task InvalidateRoslynAsync()
+    {
+        if (_root is null)
+        {
+            return;
+        }
+        try
+        {
+            await JS.InvokeVoidAsync("xfIntellisense.invalidate", _root);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (JSException)
+        {
+            // página sem Monaco aberto: nada a invalidar
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private bool _showConfirm;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string? _confirmTarget;
+    private string _confirmText = "Confirmar";
+    private Func<Task>? _confirmAction;
+
+    private void Confirm(string title, string message, string? target, string confirmText, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmTarget = target;
+        _confirmText = confirmText;
+        _confirmAction = action;
+        _showConfirm = true;
+        StateHasChanged();
+    }
+
+    private Task OnConfirmChanged(bool open)
+    {
+        _showConfirm = open;
+        if (!open)
+        {
+            _confirmAction = null;
+        }
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task RunConfirmAsync()
+    {
+        var action = _confirmAction;
+        _confirmAction = null;
+        _showConfirm = false;
+        if (action is not null)
+        {
+            await action();
+        }
+        StateHasChanged();
+    }
+
+    // ---------------------------------------------------------------- montagem
+
+    private static RenderFragment Svg(string name) => builder =>
+    {
+        var svg = XFSvgIcons.Get(name);
+        if (!string.IsNullOrEmpty(svg))
+        {
+            builder.AddMarkupContent(0, svg);
+        }
+    };
+
+    private string Rel(string path) =>
+        Ui.CurrentProject is { } p && path.StartsWith(p.Path, StringComparison.OrdinalIgnoreCase)
+            ? path[p.Path.Length..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            : path;
+
+    /// <summary>
+    /// Prévia da linha com TODAS as ocorrências do termo destacadas
+    /// (o serviço devolve os intervalos da mesma linha).
+    /// </summary>
+    private static string Highlight(SearchMatch match)
+    {
+        var text = match.LineText;
+        if (text.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var spans = match.LineSpans is { Count: > 0 }
+            ? match.LineSpans
+                .Where(s => s.Start >= 0 && s.Start < text.Length)
+                .OrderBy(s => s.Start)
+                .ToArray()
+            : new[] { new SearchMatchSpan(Math.Clamp(match.Column - 1, 0, text.Length - 1), 1) };
+
+        var sb = new StringBuilder(text.Length + 24);
+        var position = 0;
+        foreach (var span in spans)
+        {
+            if (span.Start < position)
+            {
+                continue; // ocorrência sobreposta
+            }
+            sb.Append(Enc(text[position..span.Start]));
+            var end = Math.Min(text.Length, span.Start + Math.Max(1, span.Length));
+            sb.Append("<mark class=\"ide-sx__mark\">").Append(Enc(text[span.Start..end])).Append("</mark>");
+            position = end;
+        }
+        sb.Append(Enc(text[position..]));
+        return sb.ToString();
+    }
+
+    private static string Enc(string value) => System.Net.WebUtility.HtmlEncode(value);
+
+    public async ValueTask DisposeAsync()
+    {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _historyCts?.Cancel();
+        _historyCts?.Dispose();
+        await Task.CompletedTask;
+    }
+
+    /// <summary>Uma busca do histórico (chave única = termo + filtros).</summary>
+    private sealed class HistoryEntry
+    {
+        [JsonPropertyName("term")]
+        public string Term { get; set; } = string.Empty;
+
+        [JsonPropertyName("include")]
+        public string? Include { get; set; }
+
+        [JsonPropertyName("exclude")]
+        public string? Exclude { get; set; }
+
+        [JsonPropertyName("regex")]
+        public bool Regex { get; set; }
+
+        [JsonPropertyName("caseSensitive")]
+        public bool CaseSensitive { get; set; }
+
+        [JsonPropertyName("wholeWord")]
+        public bool WholeWord { get; set; }
+
+        public string Key => string.Join('|', Term, Include, Exclude, Regex, CaseSensitive, WholeWord);
+
+        public string FilterLabel
+        {
+            get
+            {
+                var flags = new List<string>();
+                if (Regex)
+                {
+                    flags.Add("regex");
+                }
+                if (CaseSensitive)
+                {
+                    flags.Add("diferencia maiúsc.");
+                }
+                if (WholeWord)
+                {
+                    flags.Add("palavra inteira");
+                }
+                if (!string.IsNullOrWhiteSpace(Include))
+                {
+                    flags.Add("inclui " + Include);
+                }
+                if (!string.IsNullOrWhiteSpace(Exclude))
+                {
+                    flags.Add("exclui " + Exclude);
+                }
+                return flags.Count == 0 ? Term : $"{Term} — {string.Join(", ", flags)}";
+            }
+        }
+    }
+}

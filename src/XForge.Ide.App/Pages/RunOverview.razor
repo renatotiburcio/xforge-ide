@@ -1,0 +1,229 @@
+@page "/run"
+@rendermode InteractiveServer
+@using Microsoft.JSInterop
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Services
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@implements IDisposable
+
+<PageTitle>XForge IDE — Executar e Depurar</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true">
+    <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Executar e Depurar</XFTypography>
+
+    @if (Ui.CurrentProject is null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                    Abra um projeto em <b>Projetos</b> para executar build/run.
+                </XFTypography>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        @* ------------------------------------------------------------- comandos *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <div class="flex items-center justify-between mb-3">
+                    <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                        @Ui.CurrentProject.Name
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                        @Ui.CurrentProject.Path
+                    </XFTypography>
+                </div>
+
+                <div class="ide-run__actions">
+                    @foreach (var cmd in _commands)
+                    {
+                        <button class="ide-run__action" title="@cmd.Description" aria-label="@($"Executar {cmd.Label}")"
+                                disabled="@_busy"
+                                @onclick="() => RunAsync(cmd.Command)">
+                            <span class="ide-run__action-icon">@((MarkupString)XForge.DesignSystem.Components.Icon.XFSvgIcons.Get(cmd.Icon))</span>
+                            <span>@cmd.Label</span>
+                            <code class="ide-run__action-cmd">dotnet @cmd.Command</code>
+                        </button>
+                    }
+                    <button class="ide-run__action ide-run__action--danger" title="Interromper a execução atual"
+                            aria-label="Parar execução atual"
+                            disabled="@(!_busy)" @onclick="StopAsync">
+                        <span class="ide-run__action-icon">@((MarkupString)XForge.DesignSystem.Components.Icon.XFSvgIcons.Get("stop"))</span>
+                        <span>Parar</span>
+                    </button>
+                </div>
+
+                @if (_busy)
+                {
+                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="Executando…" />
+                }
+            </ChildContent>
+        </XFCard>
+
+        @* ---------------------------------------------------------------- console *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.None" Class="ide-run__card">
+            <ChildContent>
+                <div class="ide-run__head">
+                    <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">Console</XFTypography>
+                    <div class="flex items-center gap-2">
+                        <XFButton Text="Limpar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                                  OnClick="ClearAsync" />
+                        <XFButton Text="Copiar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                                  OnClick="CopyAsync" />
+                    </div>
+                </div>
+                <div class="ide-run__console" id="ide-run-console">
+                    @foreach (var line in _lines)
+                    {
+                        <div class="ide-run__line ide-run__line--@line.Kind">@line.Text</div>
+                    }
+                    @if (_lines.Count == 0)
+                    {
+                        <span class="ide-run__empty">Aguardando comando…</span>
+                    }
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+</XFStack>
+
+@code {
+    private readonly List<(string Kind, string Text)> _lines = new();
+    private bool _busy;
+    private string? _currentId;
+
+    [Inject] private BuildRunService BuildRun { get; set; } = default!;
+    [Inject] private IdeUiState Ui { get; set; } = default!;
+    [Inject] private IdeOutputService Output { get; set; } = default!;
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    private readonly (string Label, string Command, string Icon, string Description)[] _commands = new[]
+    {
+        ("Build", "build -v minimal", "hammer", "Compila a solução do projeto"),
+        ("Run", "run --project src/*.Api", "play", "Executa a API do app gerado"),
+        ("Run (cliente)", "run --project src/*.Client", "play", "Executa o cliente Blazor do app gerado"),
+        ("Test", "test", "flask", "Roda os testes automatizados"),
+        ("Clean", "clean", "trash", "Limpa bin/obj da solução"),
+        ("Restore", "restore", "download", "Restaura os pacotes NuGet"),
+    };
+
+    protected override void OnInitialized()
+    {
+        BuildRun.LineReceived += OnLineReceived;
+        BuildRun.Finished += OnFinished;
+        Ui.Changed += OnUiStateChanged;
+    }
+
+    private void OnUiStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnLineReceived(string id, string tag, string text)
+    {
+        if (id != _currentId)
+        {
+            return;
+        }
+        _lines.Add((tag, text));
+        if (_lines.Count > 2000)
+        {
+            _lines.RemoveRange(0, _lines.Count - 2000);
+        }
+        // espelha no canal "Saída" do painel do editor
+        Output.Write("Build", text);
+        InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            try
+            {
+                await JS.InvokeVoidAsync("eval",
+                    "var e=document.getElementById('ide-run-console'); if(e) e.scrollTop = e.scrollHeight;");
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        });
+    }
+
+    private void OnFinished(string id, int exitCode)
+    {
+        if (id != _currentId)
+        {
+            return;
+        }
+        _busy = false;
+        Ui.SetStatus($"Execução finalizada (código {exitCode})");
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RunAsync(string command)
+    {
+        if (Ui.CurrentProject is null || _busy)
+        {
+            return;
+        }
+        _lines.Clear();
+        _busy = true;
+        _currentId = null;
+        StateHasChanged();
+
+        try
+        {
+            var task = await BuildRun.RunAsync(command, Ui.CurrentProject.Path);
+            _currentId = task.Id;
+            Ui.SetStatus($"Executando: dotnet {command}");
+        }
+        catch (Exception ex)
+        {
+            _lines.Add(("err", ex.Message));
+            _busy = false;
+        }
+        StateHasChanged();
+    }
+
+    private Task StopAsync()
+    {
+        if (_currentId is not null)
+        {
+            BuildRun.Stop(_currentId);
+        }
+        else
+        {
+            BuildRun.StopAll();
+            _busy = false;
+        }
+        Ui.SetStatus("Execução interrompida");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task ClearAsync()
+    {
+        _lines.Clear();
+        return Task.CompletedTask;
+    }
+
+    private async Task CopyAsync()
+    {
+        var text = string.Join("\n", _lines.Select(l => l.Text));
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Ui.SetStatus("Console copiado");
+        }
+        catch
+        {
+            Ui.SetStatus("Não foi possível copiar");
+        }
+    }
+
+    public void Dispose()
+    {
+        BuildRun.LineReceived -= OnLineReceived;
+        BuildRun.Finished -= OnFinished;
+        Ui.Changed -= OnUiStateChanged;
+    }
+}

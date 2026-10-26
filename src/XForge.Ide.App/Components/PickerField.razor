@@ -1,0 +1,186 @@
+@using Microsoft.JSInterop
+@using XForge.DesignSystem.Components.Forms.TextInput
+@using XForge.DesignSystem.Components.Forms.Combobox
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.Icon
+
+<div class="picker-field">
+    <div class="picker-field__row">
+        <div class="picker-field__input">
+            <XFTextInput Label="@Label" Placeholder="@Placeholder"
+                         Value="@Value" ValueChanged="OnValueChangedAsync" />
+        </div>
+        <button type="button" class="picker-field__btn" title="@ButtonTitle"
+                aria-label="@ButtonTitle" @onclick="PickAsync">
+            <span class="picker-field__icon">@((MarkupString)ButtonIcon)</span>
+            <span class="picker-field__btn-label">@ButtonText</span>
+        </button>
+    </div>
+
+    @if (_pickerError is not null)
+    {
+        <div class="picker-field__error" role="alert" aria-live="assertive">
+            @_pickerError
+        </div>
+    }
+
+    @if (_recent.Count > 0)
+    {
+        <div class="picker-field__recent">
+            <XFCombobox TItem="string" TValue="string"
+                        Label="@RecentLabel"
+                        Placeholder="Selecione um caminho recente"
+                        Items="@_recent"
+                        TextSelector="@(p => p)"
+                        ValueSelector="@(p => p)"
+                        Value="@Value" ValueChanged="OnValueChangedAsync" />
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>Modo: "folder" ou "file".</summary>
+    [Parameter] public string Mode { get; set; } = "folder";
+
+    [Parameter] public string? Value { get; set; }
+
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+
+    [Parameter] public string Label { get; set; } = "Caminho";
+
+    [Parameter] public string Placeholder { get; set; } = "Selecione ou digite o caminho";
+
+    [Parameter] public string? Accept { get; set; }
+
+    /// <summary>Chave de persistência dos recentes (ex.: "xf-recent-folders").</summary>
+    [Parameter] public string RecentKey { get; set; } = "xf-recent-paths";
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    private const string FolderIcon =
+        """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>""";
+
+    private const string FileIcon =
+        """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>""";
+
+    private List<string> _recent = new();
+    private string? _pickerError;
+    private string RecentLabel => Mode == "folder" ? "Pastas recentes" : "Arquivos recentes";
+    private string ButtonText => Mode == "folder" ? "Procurar pasta" : "Procurar arquivo";
+    private string ButtonTitle => Mode == "folder" ? "Selecionar pasta" : "Selecionar arquivo";
+    private string ButtonIcon => Mode == "folder" ? FolderIcon : FileIcon;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadRecentAsync();
+            StateHasChanged();
+        }
+    }
+
+    private async Task PickAsync()
+    {
+        _pickerError = null;
+        try
+        {
+            var hasNative = await JS.InvokeAsync<bool>(
+                Mode == "folder" ? "xfPickers.hasDirectorySupport" : "xfPickers.hasFileSupport");
+
+            if (!hasNative)
+            {
+                _pickerError = "Seleção nativa indisponível neste ambiente. Digite o caminho completo manualmente.";
+                StateHasChanged();
+                return;
+            }
+
+            var picked = Mode == "folder"
+                ? await JS.InvokeAsync<List<PickerResult>>("xfPickers.pickDirectory")
+                : await JS.InvokeAsync<List<PickerResult>>("xfPickers.pickFile", Accept);
+
+            var selected = picked?.FirstOrDefault();
+            if (selected is null)
+            {
+                return;
+            }
+
+            var path = string.IsNullOrWhiteSpace(selected.Path) ? null : selected.Path.Trim();
+            if (path is null || !System.IO.Path.IsPathFullyQualified(path))
+            {
+                _pickerError = "O seletor retornou apenas um nome. Digite o caminho completo (ex.: E:\\Projetos\\MeuSistema).";
+                StateHasChanged();
+                return;
+            }
+
+            await OnValueChangedAsync(path);
+            await SaveRecentAsync(path);
+        }
+        catch (JSException)
+        {
+            _pickerError = "Seleção nativa indisponível. Digite o caminho completo manualmente.";
+        }
+        catch (InvalidOperationException)
+        {
+            // circuito em prerender
+        }
+    }
+
+    private Task OnValueChangedAsync(string? value)
+    {
+        Value = value;
+        return ValueChanged.InvokeAsync(value);
+    }
+
+    private async Task SaveRecentAsync(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        path = path.Trim();
+        if (!_recent.Contains(path, StringComparer.OrdinalIgnoreCase))
+        {
+            _recent.Insert(0, path);
+            if (_recent.Count > 8)
+            {
+                _recent.RemoveRange(8, _recent.Count - 8);
+            }
+        }
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", RecentKey, System.Text.Json.JsonSerializer.Serialize(_recent));
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task LoadRecentAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", RecentKey);
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+                if (list is not null)
+                {
+                    _recent = list;
+                }
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+    }
+
+    public sealed record PickerResult(
+        [property: System.Text.Json.Serialization.JsonPropertyName("name")] string Name,
+        [property: System.Text.Json.Serialization.JsonPropertyName("path")] string? Path);
+}

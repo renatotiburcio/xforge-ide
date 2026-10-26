@@ -1,0 +1,230 @@
+@using XForge.Ide.Application.Services.Ai
+@using XForge.Ide.App.Services
+@inject AiAssistantService Assistant
+@inject WorkspaceContextBuilder ContextBuilder
+@inject AiSettingsStore AiSettings
+@inject IdeOutputService Output
+@inject IdeUiState Ui
+@implements IDisposable
+
+<div class="ide-panel__head">
+    <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">Assistente IA</XFTypography>
+    @if (_messages.Count > 0)
+    {
+        <XFButton Text="Limpar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                  OnClick="ClearAsync" />
+    }
+</div>
+
+@* atalhos de ação sobre o arquivo ativo *@
+<div class="ide-ai__actions">
+    @foreach (var (action, label, icon) in _actions)
+    {
+        <button class="ide-ai__action" title="@label" disabled="@_busy" @onclick="() => RunAsync(action, null)">
+            <span class="ide-ai__action-icon">@((MarkupString)XForge.DesignSystem.Components.Icon.XFSvgIcons.Get(icon))</span>
+            <span>@label</span>
+        </button>
+    }
+</div>
+
+@* contexto anexado *@
+<div class="ide-ai__context">
+    @if (_activeFile is null)
+    {
+        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Secondary">
+            Nenhum arquivo ativo — abra um arquivo no editor para obter ajuda contextual.
+        </XFTypography>
+    }
+    else
+    {
+        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Secondary">
+            Contexto: <b>@System.IO.Path.GetFileName(_activeFile)</b>
+            @if (_selectionLength > 0)
+            {
+                <span>· @_selectionLength caracteres selecionados</span>
+            }
+        </XFTypography>
+    }
+</div>
+
+@* conversa *@
+<div class="ide-ai__messages" id="ide-ai-messages">
+    @if (_messages.Count == 0)
+    {
+        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+            Peça uma explicação, refatoração, revisão ou nova funcionalidade para o arquivo ativo.
+            O assistente enxerga o projeto inteiro e o arquivo em edição.
+        </XFTypography>
+    }
+    @foreach (var m in _messages)
+    {
+        <div class="ide-ai__msg ide-ai__msg--@m.Role">
+            <div class="ide-ai__msg-head">
+                <XFTypography Variant="XFTypographyVariant.Caption" Weight="XFTypographyWeight.Semibold" Color="XFTypographyColor.Secondary">
+                    @(m.Role == "user" ? "Você" : "Assistente")
+                </XFTypography>
+            </div>
+            <div class="ide-ai__msg-body">@((MarkupString)RenderMarkdown(m.Content))</div>
+        </div>
+    }
+    @if (_busy)
+    {
+        <div class="ide-ai__msg ide-ai__msg--assistant">
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">Pensando…</XFTypography>
+        </div>
+    }
+    @if (_error is not null)
+    {
+        <div class="ide-ai__msg ide-ai__msg--error" role="alert" aria-live="assertive">
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Danger">@_error</XFTypography>
+        </div>
+    }
+</div>
+
+@* entrada livre *@
+<div class="ide-ai__composer">
+    <textarea class="ide-ai__input"
+              rows="2"
+              aria-label="Pergunte ou peça uma alteração no arquivo ativo"
+              placeholder="Pergunte ou peça uma alteração no arquivo ativo…"
+              @bind="_prompt"
+              @bind:event="oninput"
+              disabled="@_busy"></textarea>
+    <XFButton Text="Enviar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+              Disabled="@(_busy || string.IsNullOrWhiteSpace(_prompt))"
+              OnClick="() => RunAsync(AiAction.Custom, _prompt)" />
+</div>
+
+@if (!HasProvider())
+{
+    <div class="ide-ai__warning">
+        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Warning">
+            Provedor não configurado. Ajuste em <a href="/settings/ai">Configurações › Provedores de IA</a>.
+        </XFTypography>
+    </div>
+}
+
+<ConfirmDialog Open="@_showClearConfirm" OpenChanged="OnClearConfirmChanged"
+               Title="Limpar conversa do assistente?"
+               ConfirmMessage="O histórico exibido desta sessão será removido."
+               ConfirmText="Limpar conversa"
+               OnConfirm="ConfirmClearAsync" />
+
+@code {
+    /// <summary>Arquivo ativo (caminho completo) informado pela página do editor.</summary>
+    [Parameter] public string? ActiveFile { get; set; }
+
+    /// <summary>Conteúdo atual do arquivo ativo.</summary>
+    [Parameter] public string? ActiveFileContent { get; set; }
+
+    /// <summary>Texto selecionado no editor (quando houver).</summary>
+    [Parameter] public string? SelectedText { get; set; }
+
+    [Parameter] public EventCallback<string> OnInsertCode { get; set; }
+
+    private readonly List<(string Role, string Content)> _messages = new();
+    private readonly (string Action, string Label, string Icon)[] _actions = new[]
+    {
+        (AiAction.Explain, "Explicar", "file-code"),
+        (AiAction.Refactor, "Refatorar", "code"),
+        (AiAction.Review, "Revisar", "eye"),
+        (AiAction.Tests, "Testes", "flask"),
+        (AiAction.Feature, "Funcionalidade", "wand-magic-sparkles"),
+        (AiAction.Fix, "Corrigir", "wrench"),
+    };
+
+    private string _prompt = string.Empty;
+    private bool _busy;
+    private string? _error;
+    private bool _showClearConfirm;
+    private string? _activeFile;
+    private int _selectionLength;
+
+    protected override void OnInitialized() => Output.Changed += OnOutputChanged;
+
+    protected override void OnParametersSet()
+    {
+        _activeFile = ActiveFile;
+        _selectionLength = SelectedText?.Length ?? 0;
+    }
+
+    private void OnOutputChanged() => InvokeAsync(StateHasChanged);
+
+    private bool HasProvider()
+    {
+        var s = AiSettings.Get();
+        return !string.IsNullOrWhiteSpace(s.Endpoint) &&
+               (s.Provider != "openai" || !string.IsNullOrWhiteSpace(s.ApiKey));
+    }
+
+    private async Task RunAsync(string action, string? prompt)
+    {
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+
+        var question = prompt ?? AiAction.Label(action);
+        _messages.Add(("user", question));
+        try
+        {
+            var context = await ContextBuilder.BuildAsync(
+                Ui.CurrentProject?.Name,
+                Ui.CurrentProject?.Path,
+                _activeFile,
+                ActiveFileContent ?? string.Empty,
+                SelectedText);
+
+            var completion = await Assistant.RunAsync(action, context, prompt);
+            _messages.Add(("assistant", completion.Content));
+            Output.Write("IA", $"{AiAction.Label(action)} · {completion.Model ?? "modelo"} · {question}");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Output.Write("IA", "erro: " + ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+            _prompt = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    private Task ClearAsync()
+    {
+        _showClearConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnClearConfirmChanged(bool open)
+    {
+        _showClearConfirm = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmClearAsync()
+    {
+        _showClearConfirm = false;
+        _messages.Clear();
+        _error = null;
+        StateHasChanged();
+        await Task.CompletedTask;
+    }
+
+    public void Dispose() => Output.Changed -= OnOutputChanged;
+
+    /// <summary>Renderiza código em blocos, listas e negrito de forma mínima e segura.</summary>
+    private static string RenderMarkdown(string text)
+    {
+        var html = System.Net.WebUtility.HtmlEncode(text);
+        html = System.Text.RegularExpressions.Regex.Replace(
+            html,
+            "```([a-z]*)\\r?\\n(.*?)```",
+            m => "<pre class=\"ide-ai__code\"><code>" + m.Groups[2].Value + "</code></pre>",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        html = System.Text.RegularExpressions.Regex.Replace(html, "`([^`\\n]+)`", "<code>$1</code>");
+        html = System.Text.RegularExpressions.Regex.Replace(html, "\\*\\*([^*\\n]+)\\*\\*", "<b>$1</b>");
+        return html.Replace("\n", "<br />");
+    }
+}

@@ -1,0 +1,56 @@
+name: IDE Qualidade
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  NODE_VERSION: '20'
+  IDE_URL: 'http://127.0.0.1:5600'
+
+jobs:
+  qualidade-ide:
+    name: Build, testes e gate de UI/acessibilidade
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Instalar dependências front-end
+        run: npm install
+
+      - name: Gerar assets (Monaco, xterm e CSS)
+        run: npm run build
+
+      - name: Compilar solução
+        run: dotnet build XForge.Ide.slnx -c Debug
+
+      - name: Testes unitários
+        run: dotnet test tests/XForge.Ide.Core.Tests/XForge.Ide.Core.Tests.csproj -c Debug --nologo
+
+      - name: Gate de UI e acessibilidade
+        shell: pwsh
+        run: pwsh ./scripts/qa-gate.ps1 -BaseUrl "${{ env.IDE_URL }}" -ReportPath qa-report.json
+
+      - name: Publicar relatório do gate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ide-ui-a11y-report
+          path: qa-report.json
+          if-no-files-found: warn
+          retention-days: 7

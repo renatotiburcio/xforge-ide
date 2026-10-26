@@ -1,0 +1,116 @@
+@using XForge.DesignSystem.Components.Button
+@using Microsoft.AspNetCore.Components.Web
+
+<div class="ide-tabbar" role="tablist" aria-label="Abas do editor" @attributes="AdditionalAttributes">
+    @foreach (var (tab, index) in Tabs.Select((t, i) => (t, i)))
+    {
+        <div class="ide-tab @(tab.IsActive ? "ide-tab--active" : null)"
+             draggable="true"
+             role="tab"
+             aria-selected="@(tab.IsActive ? "true" : "false")"
+             tabindex="@(tab.IsActive ? "0" : "-1")"
+             aria-label="@tab.Title"
+             @ondragover="() => HandleDragOver(index)"
+             @ondrop="() => HandleDrop(index)"
+             @ondragstart="() => HandleDragStart(index)"
+             @onclick="() => ActivateAsync(tab)"
+             @onkeydown="(KeyboardEventArgs e) => OnTabKeyDownAsync(e, tab)">
+            @if (tab.Dirty)
+            {
+                <span class="ide-tab__dirty" title="Alterações não salvas" role="img" aria-label="Alterações não salvas"></span>
+            }
+            else
+            {
+                <span class="ide-tab__icon">@((MarkupString)XForge.DesignSystem.Components.Icon.XFSvgIcons.Get(tab.Icon))</span>
+            }
+            <span class="ide-tab__label" title="@tab.Path">@tab.Title</span>
+            <button class="ide-tab__close"
+                    title="Fechar (Ctrl+W)"
+                    aria-label="Fechar @tab.Title"
+                    @onclick="() => CloseAsync(tab)"
+                    @onclick:stopPropagation="true"
+                    @onkeydown:stopPropagation="true">
+                <span class="ide-tab__close-icon">@((MarkupString)CloseIcon)</span>
+            </button>
+        </div>
+    }
+    @if (Footer is not null)
+    {
+        <div class="ide-tabbar__footer">@Footer</div>
+    }
+</div>
+
+@code {
+    private const string CloseIcon =
+        """<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>""";
+
+    /// <summary>Modelo de aba do editor.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<EditorTab> Tabs { get; set; } = Array.Empty<EditorTab>();
+
+    [Parameter] public RenderFragment? Footer { get; set; }
+
+    [Parameter] public EventCallback<EditorTab> OnActivate { get; set; }
+
+    [Parameter] public EventCallback<EditorTab> OnClose { get; set; }
+
+    [Parameter] public EventCallback<TabReorderRequest> OnReorder { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private int _dragIndex = -1;
+
+    private void HandleDragStart(int index) => _dragIndex = index;
+
+    private void HandleDragOver(int index) => _ = RequestReorderAsync(index);
+
+    private async Task HandleDrop(int index)
+    {
+        await RequestReorderAsync(index);
+        _dragIndex = -1;
+    }
+
+    /// <summary>Solicita reordenação com origem e destino (o destino desconta o item removido).</summary>
+    private async Task RequestReorderAsync(int targetIndex)
+    {
+        if (_dragIndex < 0 || _dragIndex >= Tabs.Count || targetIndex < 0 || targetIndex >= Tabs.Count)
+        {
+            return;
+        }
+
+        var to = _dragIndex < targetIndex ? targetIndex - 1 : targetIndex;
+        if (to == _dragIndex || to < 0)
+        {
+            return;
+        }
+
+        await OnReorder.InvokeAsync(new TabReorderRequest(_dragIndex, to));
+    }
+
+    private Task ActivateAsync(EditorTab tab) => OnActivate.InvokeAsync(tab);
+
+    private Task CloseAsync(EditorTab tab) => OnClose.InvokeAsync(tab);
+
+    private Task OnTabKeyDownAsync(KeyboardEventArgs e, EditorTab tab)
+        => e.Key is "Enter" or " " or "Spacebar" ? ActivateAsync(tab) : Task.CompletedTask;
+
+    /// <summary>Pedido de reordenação de aba (índices na lista original/atual após remoção).</summary>
+    public sealed record TabReorderRequest(int From, int To);
+
+    /// <summary>Aba do editor de código (arquivo) ou do terminal integrado.</summary>
+    public sealed class EditorTab
+    {
+        public required string Id { get; init; }
+        public required string Title { get; init; }
+        public required string Path { get; init; }
+        public required string Language { get; init; }
+        public bool IsActive { get; set; }
+        public bool Dirty { get; set; }
+        public string Icon { get; set; } = "file-code";
+
+        /// <summary>"file" (editor) ou "terminal" (xterm integrado).</summary>
+        public string Kind { get; set; } = "file";
+
+        /// <summary>Id da sessão de terminal no hub (só para Kind="terminal").</summary>
+        public string? TerminalId { get; set; }
+    }
+}

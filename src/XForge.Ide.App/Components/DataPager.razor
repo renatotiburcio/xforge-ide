@@ -1,0 +1,64 @@
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.Typography
+
+@if (TotalItems > PageSize)
+{
+    <div class="ide-pager">
+        <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted"
+                      Class="ide-pager__status" role="status" aria-live="polite">
+            Mostrando @Start–@End de @TotalItems
+        </XFTypography>
+
+        <div class="ide-pager__controls">
+            <XFButton Text="Anterior"
+                      Variant="XFButtonVariant.Soft"
+                      Color="XFButtonColor.Secondary"
+                      Size="XFExtendedSize.Sm"
+                      Disabled="@(Page <= 1)"
+                      aria-label="Página anterior"
+                      OnClick="() => GoToAsync(Page - 1)" />
+
+            <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Secondary"
+                          Class="ide-pager__counter">
+                Página @Page de @TotalPages
+            </XFTypography>
+
+            <XFButton Text="Próxima"
+                      Variant="XFButtonVariant.Soft"
+                      Color="XFButtonColor.Secondary"
+                      Size="XFExtendedSize.Sm"
+                      Disabled="@(Page >= TotalPages)"
+                      aria-label="Próxima página"
+                      OnClick="() => GoToAsync(Page + 1)" />
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>Total de itens da lista completa.</summary>
+    [Parameter] public int TotalItems { get; set; }
+
+    /// <summary>Página atual, baseada em 1.</summary>
+    [Parameter] public int Page { get; set; } = 1;
+
+    /// <summary>Quantidade de itens por página.</summary>
+    [Parameter] public int PageSize { get; set; } = 20;
+
+    /// <summary>Disparado quando o usuário troca de página.</summary>
+    [Parameter] public EventCallback<int> PageChanged { get; set; }
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalItems / (double)PageSize));
+    private int Start => TotalItems == 0 ? 0 : ((Math.Clamp(Page, 1, TotalPages) - 1) * PageSize) + 1;
+    private int End => Math.Min(TotalItems, Math.Clamp(Page, 1, TotalPages) * PageSize);
+
+    private async Task GoToAsync(int page)
+    {
+        var target = Math.Clamp(page, 1, TotalPages);
+        if (target == Page)
+        {
+            return;
+        }
+
+        await PageChanged.InvokeAsync(target);
+    }
+}

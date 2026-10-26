@@ -1,0 +1,800 @@
+@page "/run/console"
+@rendermode InteractiveServer
+@using Microsoft.JSInterop
+@using XForge.Ide.Application.Services
+@using XForge.Ide.App.Services
+@using XForge.DesignSystem.Components.Icon
+@inject BuildRunService BuildRun
+@inject IdeUiState Ui
+@inject IdeOutputService Output
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>XForge IDE — Console</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true">
+    @* ============================================================ cabeçalho *@
+    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center" FullWidth="true"
+              Wrap="XFWrap.Wrap">
+        <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Console</XFTypography>
+        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+            Execute o app gerado (dotnet run / watch / test / clean) e acompanhe a saída em tempo real.
+        </XFTypography>
+
+        <div class="ide-cns__status ml-auto flex items-center gap-2">
+            @if (_running)
+            {
+                <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info">
+                    <ChildContent>
+                        <span class="ide-cns__pulse" aria-hidden="true"></span>
+                        Executando @ElapsedText
+                    </ChildContent>
+                </XFBadge>
+            }
+            else if (_exitCode is int code)
+            {
+                @if (_stoppedByUser)
+                {
+                    <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Secondary" Text="Parado" />
+                }
+                else if (code == 0)
+                {
+                    <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Success" Text="Concluído" />
+                }
+                else
+                {
+                    <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Danger"
+                              Text="@($"Erro (código {code})")" />
+                }
+            }
+            else
+            {
+                <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Neutral" Text="Aguardando comando" />
+            }
+        </div>
+    </XFStack>
+
+    @if (Ui.CurrentProject is null)
+    {
+        @* ====================================================== estado vazio *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                    <span class="ide-cns__empty-icon">@((MarkupString)XFSvgIcons.Get("folder-open"))</span>
+                    <XFStack Orientation="XFOrientation.Vertical" Gap="1">
+                        <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                            Nenhum projeto aberto
+                        </XFTypography>
+                        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                            O console executa comandos <code>dotnet</code> no diretório do projeto aberto.
+                            Abra um projeto em <b>Projetos</b> (menu inferior do rail) para continuar.
+                        </XFTypography>
+                    </XFStack>
+                </XFStack>
+            </ChildContent>
+        </XFCard>
+        <XFButton Text="Ir para Projetos" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                  Size="XFExtendedSize.Sm" Title="Abrir a lista de projetos (/projects)" OnClick="GoToProjects" />
+    }
+    else
+    {
+        @* ============================================= comandos rápidos *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center"
+                          JustifyContent="XFJustifyContent.SpaceBetween" FullWidth="true" Wrap="XFWrap.Wrap">
+                    <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">
+                        Comandos rápidos
+                    </XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                        @Ui.CurrentProject.Path
+                    </XFTypography>
+                </XFStack>
+
+                <div class="ide-cns__grid mt-3">
+                    @foreach (var cmd in QuickCommands)
+                    {
+                        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md" Interactive="true"
+                                 Class="@CardClass(_running)" Title="@($"dotnet {cmd.Args} — {cmd.Hint}")"
+                                 AriaLabel="@($"Executar {cmd.Label}: dotnet {cmd.Args}")"
+                                 OnClick="() => RunAsync(cmd.Args)">
+                            <ChildContent>
+                                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                                    <span class="ide-cns__cmd-icon">@((MarkupString)XFSvgIcons.Get(cmd.Icon))</span>
+                                    <XFStack Orientation="XFOrientation.Vertical" Gap="0">
+                                        <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">
+                                            @cmd.Label
+                                        </XFTypography>
+                                        <code class="ide-cns__cmd-code">dotnet @cmd.Args</code>
+                                    </XFStack>
+                                </XFStack>
+                            </ChildContent>
+                        </XFCard>
+                    }
+                </div>
+
+                @if (_conventionOk)
+                {
+                    <div class="ide-cns__note mt-3">
+                        <XFStack Orientation="XFOrientation.Vertical" Gap="1">
+                            <div>
+                                <span class="ide-cns__note-label">API</span>
+                                <code>@_apiProject</code>
+                            </div>
+                            <div>
+                                <span class="ide-cns__note-label">Cliente</span>
+                                <code>@_clientProject</code>
+                            </div>
+                            <div>
+                                <span class="ide-cns__note-label">Testes</span>
+                                <code>@_testsProject</code>
+                            </div>
+                        </XFStack>
+                    </div>
+                }
+                else if (_apiProject is null)
+                {
+                    <div class="ide-cns__note mt-3">
+                        <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center">
+                            <span class="ide-cns__note-icon">@((MarkupString)XFSvgIcons.Get("circle-exclamation"))</span>
+                            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Warning">
+                                Não encontrei <code>src/*.Api</code> por convenção neste projeto.
+                                Escolha um <code>.csproj</code> abaixo para poder executar.
+                            </XFTypography>
+                        </XFStack>
+                    </div>
+                    <XFCombobox TItem="string" TValue="string" Label="Projeto alvo" Placeholder="Selecione um .csproj"
+                                Items="@_allProjects" TextSelector="@(p => p)" ValueSelector="@(p => p)"
+                                Value="@_selectedProject" ValueChanged="OnProjectChanged" />
+                }
+                else
+                {
+                    <div class="ide-cns__note mt-3">
+                        <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center">
+                            <span class="ide-cns__note-icon">@((MarkupString)XFSvgIcons.Get("circle-exclamation"))</span>
+                            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Warning">
+                                Convenção incompleta (@ConventionMissing). Os comandos abaixo usam o que foi encontrado;
+                                <code>dotnet test</code> e <code>dotnet clean</code> agem sobre a solução inteira.
+                            </XFTypography>
+                        </XFStack>
+                    </div>
+                }
+            </ChildContent>
+        </XFCard>
+
+        @* ================================================ entrada / execução *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Md">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.End" FullWidth="true"
+                          Wrap="XFWrap.Wrap">
+                    <div class="ide-cns__args">
+                        <XFTextInput Label="Argumentos adicionais" Placeholder="--configuration Release"
+                                     HelperText="Anexados ao comando escolhido. Ex.: --configuration Release ou -- --verbose"
+                                     Value="@_arguments" ValueChanged="OnArgumentsChanged"
+                                     Disabled="@_running" Immediate="true" />
+                    </div>
+                    <XFButton Text="Executar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              Disabled="@_running" OnClick="RunSelectedAsync">
+                        <StartIcon>
+                            <span class="ide-cns__btn-icon">@((MarkupString)XFSvgIcons.Get("circle-play"))</span>
+                        </StartIcon>
+                    </XFButton>
+                    <XFButton Text="Parar" Variant="XFButtonVariant.Outline" Color="XFButtonColor.Danger"
+                              Disabled="@(!_running)" OnClick="StopAsync">
+                        <StartIcon>
+                            <span class="ide-cns__btn-icon">@((MarkupString)XFSvgIcons.Get("circle-stop"))</span>
+                        </StartIcon>
+                    </XFButton>
+                </XFStack>
+
+                <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted" Class="mt-2">
+                    O <code>BuildRunService</code> expõe somente leitura da saída do processo: não há canal de
+                    stdin, então o campo acima serve apenas para argumentos de linha de comando. Para interagir
+                    com um processo (enviar comandos durante a execução) use o terminal integrado.
+                </XFTypography>
+
+                @if (_errorText is not null)
+                {
+                    <div class="ide-cns__error mt-2">@_errorText</div>
+                }
+            </ChildContent>
+        </XFCard>
+
+        @* =========================================================== console *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.None" Class="ide-cns__card">
+            <ChildContent>
+                <div class="ide-cns__head">
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center">
+                        <span class="ide-cns__head-icon">@((MarkupString)XFSvgIcons.Get("terminal"))</span>
+                        <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">
+                            Saída do processo
+                        </XFTypography>
+                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Neutral"
+                                  Text="@($"{_lines.Count} linhas")" />
+                        @if (!string.IsNullOrWhiteSpace(_lastCommand))
+                        {
+                            <code class="ide-cns__head-cmd">dotnet @_lastCommand</code>
+                        }
+                    </XFStack>
+
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="2" AlignItems="XFAlignItems.Center">
+                        <XFButton Text="@(_showTimes ? "Timestamps: sim" : "Timestamps: não")"
+                                  Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" Active="@_showTimes" OnClick="ToggleTimes" />
+                        <XFButton Text="Limpar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="ClearConsole" />
+                        <XFButton Text="Copiar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                                  Size="XFExtendedSize.Sm" OnClick="CopyConsoleAsync" />
+                    </XFStack>
+                </div>
+
+                <div class="ide-cns__console" id="@ConsoleId">
+                    @foreach (var line in _lines)
+                    {
+                        <div class="ide-cns__line ide-cns__line--@line.Kind">
+                            @if (_showTimes)
+                            {
+                                <span class="ide-cns__time">@line.Time</span>
+                            }
+                            @line.Text
+                        </div>
+                    }
+                    @if (_lines.Count == 0)
+                    {
+                        <span class="ide-cns__empty">Nenhuma saída ainda — escolha um comando rápido acima.</span>
+                    }
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+</XFStack>
+
+@code {
+    private const string StorageKey = "xf-console-last";
+    private const string ConsoleId = "ide-cns-console";
+    private const int MaxLines = 2000;
+
+    /// <summary>Uma linha do console (tag "out"/"err" + classificação de destaque).</summary>
+    private sealed record ConsoleLine(string Time, string Kind, string Text);
+
+    private readonly List<ConsoleLine> _lines = new();
+
+    private string? _runId;
+    private bool _running;
+    private bool _stoppedByUser;
+    private int? _exitCode;
+    private string? _errorText;
+    private DateTime? _startedAt;
+    private DateTime _lastScroll = DateTime.MinValue;
+    private bool _disposed;
+    private CancellationTokenSource? _tickCts;
+
+    // persistência leve do último comando executado
+    private string _lastCommand = string.Empty;
+    private string _baseArgs = string.Empty;
+    private string _arguments = string.Empty;
+    private bool _showTimes;
+
+    // descoberta dos projetos por convenção
+    private string? _apiProject;
+    private string? _clientProject;
+    private string? _testsProject;
+    private IReadOnlyList<string> _allProjects = Array.Empty<string>();
+    private string? _selectedProject;
+    private bool _conventionOk;
+
+    /// <summary>Tempo decorrido desde o início da execução atual (mm:ss).</summary>
+    private string ElapsedText
+    {
+        get
+        {
+            if (_startedAt is null)
+            {
+                return string.Empty;
+            }
+            var span = DateTime.UtcNow - _startedAt.Value;
+            if (span < TimeSpan.Zero)
+            {
+                span = TimeSpan.Zero;
+            }
+            return $"{(int)span.TotalMinutes:00}:{span.Seconds:00}";
+        }
+    }
+
+    /// <summary>
+    /// Comandos rápidos montados a partir da convenção do projeto
+    /// (src/*.Api, src/*.Client, tests/*) ou da seleção manual do usuário.
+    /// </summary>
+    private List<QuickCommand> QuickCommands
+    {
+        get
+        {
+            var list = new List<QuickCommand>();
+            if (_apiProject is not null)
+            {
+                list.Add(new QuickCommand("Executar API", $"run --project {_apiProject}", "circle-play",
+                    "Sobe a API ASP.NET Core do app gerado"));
+                list.Add(new QuickCommand("Observar API", $"watch --project {_apiProject}", "stopwatch",
+                    "Reinicia a API a cada alteração de código"));
+            }
+            else if (_selectedProject is not null)
+            {
+                list.Add(new QuickCommand("Executar selecionado", $"run --project {_selectedProject}", "circle-play",
+                    "Executa o projeto escolhido no seletor acima"));
+            }
+
+            if (_clientProject is not null)
+            {
+                list.Add(new QuickCommand("Executar cliente", $"run --project {_clientProject}", "rocket",
+                    "Sobe o cliente Blazor WebAssembly"));
+            }
+
+            list.Add(new QuickCommand("Executar testes", "test", "flask",
+                _testsProject is not null ? $"Testes de {_testsProject}" : "Roda os testes da solução"));
+            list.Add(new QuickCommand("Limpar build", "clean", "trash", "Apaga bin/obj da solução"));
+            return list;
+        }
+    }
+
+    private sealed record QuickCommand(string Label, string Args, string Icon, string Hint);
+
+    /// <summary>Classe do card de comando: desabilita visualmente enquanto executa.</summary>
+    private static string CardClass(bool running) => running ? "ide-cns__cmd ide-cns__cmd--off" : "ide-cns__cmd";
+
+    /// <summary>Lista o que faltou na convenção (ex.: "src/*.Client, tests/*").</summary>
+    private string ConventionMissing => string.Join(", ", new[]
+    {
+        _apiProject is null ? "src/*.Api" : null,
+        _clientProject is null ? "src/*.Client" : null,
+        _testsProject is null ? "tests/*" : null
+    }.Where(x => x is not null));
+
+    protected override void OnInitialized()
+    {
+        BuildRun.LineReceived += OnLineReceived;
+        BuildRun.Finished += OnFinished;
+        Ui.Changed += OnUiStateChanged;
+        DiscoverProjects();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+        // restaura o último comando/argumentos do localStorage (render interativo já disponível)
+        await RestoreLastAsync();
+    }
+
+    private void OnUiStateChanged()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        DiscoverProjects();
+        InvokeAsync(StateHasChanged);
+    }
+
+    // ------------------------------------------------------------------ disco
+
+    /// <summary>
+    /// Descobre os projetos do app gerado por convenção e lista todos os .csproj
+    /// (ignorando bin/obj) para o seletor manual.
+    /// </summary>
+    private void DiscoverProjects()
+    {
+        _apiProject = null;
+        _clientProject = null;
+        _testsProject = null;
+        _allProjects = Array.Empty<string>();
+        _selectedProject = null;
+        _conventionOk = false;
+
+        var root = Ui.CurrentProject?.Path;
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+        {
+            return;
+        }
+
+        try
+        {
+            var all = Directory
+                .EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
+                .Where(p => !IsInBuildFolder(p))
+                .Select(p => Path.GetRelativePath(root, p).Replace('\\', '/'))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            _allProjects = all;
+
+            _apiProject = Pick(all, "src/", ".Api.csproj");
+            _clientProject = Pick(all, "src/", ".Client.csproj");
+            _testsProject = Pick(all, "tests/", ".csproj");
+
+            _conventionOk = _apiProject is not null && _clientProject is not null && _testsProject is not null;
+            if (!_conventionOk && _apiProject is null)
+            {
+                // sem API por convenção: o usuário escolhe o alvo manualmente
+                _selectedProject = all.Length > 0 ? all[0] : null;
+            }
+        }
+        catch (IOException)
+        {
+            // projeto indisponível no disco — o console segue com os comandos genéricos
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>Primeiro .csproj que casa com o prefixo de pasta e o sufixo do nome.</summary>
+    private static string? Pick(IReadOnlyList<string> projects, string folder, string suffix)
+    {
+        var preferred = projects.FirstOrDefault(p =>
+            p.StartsWith(folder, StringComparison.OrdinalIgnoreCase)
+            && p.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+        return preferred ?? (suffix == ".csproj"
+            ? projects.FirstOrDefault(p => p.StartsWith(folder, StringComparison.OrdinalIgnoreCase))
+            : projects.FirstOrDefault(p => p.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool IsInBuildFolder(string path)
+    {
+        var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return parts.Any(p =>
+            p.Equals("bin", StringComparison.OrdinalIgnoreCase)
+            || p.Equals("obj", StringComparison.OrdinalIgnoreCase)
+            || p.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // -------------------------------------------------------------- execução
+
+    /// <summary>
+    /// Executa o botão "Executar": repete o último comando rápido usado (ou o primeiro
+    /// disponível), sempre somando os argumentos adicionais digitados.
+    /// </summary>
+    private async Task RunSelectedAsync()
+    {
+        var baseArgs = _baseArgs.Length > 0 ? _baseArgs : QuickCommands.FirstOrDefault()?.Args;
+        if (!string.IsNullOrWhiteSpace(baseArgs))
+        {
+            await RunAsync(baseArgs);
+        }
+    }
+
+    private async Task RunAsync(string commandArgs)
+    {
+        if (_running || Ui.CurrentProject is null)
+        {
+            return;
+        }
+
+        var args = string.IsNullOrWhiteSpace(_arguments) ? commandArgs : $"{commandArgs} {_arguments.Trim()}";
+        args = args.Trim();
+        if (args.Length == 0)
+        {
+            return;
+        }
+
+        _baseArgs = commandArgs;
+        _runId = null;
+        _running = true;
+        _stoppedByUser = false;
+        _exitCode = null;
+        _errorText = null;
+        _startedAt = DateTime.UtcNow;
+        _lastCommand = args;
+        // registra a execução no canal "Saída" do painel do editor
+        Output.Write("Console", $"> dotnet {args}");
+        await PersistLastAsync();
+        StartTicker();
+        Ui.SetStatus($"Executando: dotnet {args}");
+        StateHasChanged();
+
+        try
+        {
+            var task = await BuildRun.RunAsync(args, Ui.CurrentProject.Path);
+            _runId = task.Id;
+        }
+        catch (Exception ex)
+        {
+            _running = false;
+            _startedAt = null;
+            _errorText = $"Falha ao iniciar: {ex.Message}";
+            StopTicker();
+            Ui.SetStatus("Falha ao iniciar a execução");
+        }
+        StateHasChanged();
+    }
+
+    private Task StopAsync()
+    {
+        if (!_running)
+        {
+            return Task.CompletedTask;
+        }
+        _stoppedByUser = true;
+        if (_runId is not null)
+        {
+            BuildRun.Stop(_runId);
+        }
+        else
+        {
+            BuildRun.StopAll();
+            Finish(0);
+        }
+        Ui.SetStatus("Execução interrompida");
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private void OnLineReceived(string id, string tag, string text)
+    {
+        if (id != _runId)
+        {
+            return;
+        }
+
+        var kind = tag == "err" ? "err" : Classify(text);
+        _lines.Add(new ConsoleLine(DateTime.Now.ToString("HH:mm:ss"), kind, text));
+        if (_lines.Count > MaxLines)
+        {
+            _lines.RemoveRange(0, _lines.Count - MaxLines);
+        }
+
+        // espelha a execução no canal "Saída" do painel do editor
+        Output.Write("Console", text);
+
+        if (_disposed)
+        {
+            return;
+        }
+        InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await ScrollToEndAsync();
+        });
+    }
+
+    /// <summary>Classifica uma linha de stdout como erro/aviso para destacar no console.</summary>
+    private static string Classify(string text)
+    {
+        if (text.Contains("warning", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("aviso", StringComparison.OrdinalIgnoreCase))
+        {
+            return "warn";
+        }
+        if (text.Contains("error", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("erro", StringComparison.OrdinalIgnoreCase))
+        {
+            return "err";
+        }
+        return "out";
+    }
+
+    private void OnFinished(string id, int exitCode)
+    {
+        if (id != _runId)
+        {
+            return;
+        }
+        Finish(exitCode);
+        if (_disposed)
+        {
+            return;
+        }
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Marca o fim da execução (código de saída, parada do cronômetro).</summary>
+    private void Finish(int exitCode)
+    {
+        _running = false;
+        _exitCode = exitCode;
+        _startedAt = null;
+        _runId = null;
+        StopTicker();
+        Ui.SetStatus(exitCode == 0
+            ? "Execução finalizada"
+            : $"Execução finalizada com erro (código {exitCode})");
+    }
+
+    // ------------------------------------------------------------- cronômetro
+
+    private void StartTicker()
+    {
+        StopTicker();
+        _tickCts = new CancellationTokenSource();
+        var token = _tickCts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+                while (await timer.WaitForNextTickAsync(token))
+                {
+                    if (_disposed)
+                    {
+                        return;
+                    }
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }, token);
+    }
+
+    private void StopTicker()
+    {
+        if (_tickCts is null)
+        {
+            return;
+        }
+        try
+        {
+            _tickCts.Cancel();
+            _tickCts.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        _tickCts = null;
+    }
+
+    // ----------------------------------------------------------------- Ações
+
+    private async Task ScrollToEndAsync()
+    {
+        // auto-scroll com throttling: a saída pode chegar em rajada
+        if ((DateTime.UtcNow - _lastScroll).TotalMilliseconds < 150)
+        {
+            return;
+        }
+        _lastScroll = DateTime.UtcNow;
+        try
+        {
+            await JS.InvokeVoidAsync("eval",
+                $"var e=document.getElementById('{ConsoleId}'); if(e) e.scrollTop = e.scrollHeight;");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+            // circuito em prerender — sem scroll
+        }
+    }
+
+    private void ToggleTimes()
+    {
+        _showTimes = !_showTimes;
+        StateHasChanged();
+    }
+
+    private void ClearConsole()
+    {
+        _lines.Clear();
+        _errorText = null;
+        StateHasChanged();
+    }
+
+    private async Task CopyConsoleAsync()
+    {
+        var text = string.Join('\n', _lines.Select(l => l.Text));
+        if (text.Length == 0)
+        {
+            Ui.SetStatus("Console vazio — nada para copiar");
+            return;
+        }
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Ui.SetStatus($"Console copiado ({_lines.Count} linhas)");
+        }
+        catch
+        {
+            Ui.SetStatus("Não foi possível copiar o console");
+        }
+    }
+
+    /// <summary>Leva o usuário para a lista de projetos (nenhum projeto aberto).</summary>
+    private void GoToProjects() => Nav.NavigateTo("/projects");
+
+    private void OnArgumentsChanged(string? value)
+    {
+        _arguments = value ?? string.Empty;
+        StateHasChanged();
+    }
+
+    private void OnProjectChanged(string? value)
+    {
+        _selectedProject = value;
+        StateHasChanged();
+    }
+
+    // -------------------------------------------------------- persistência
+
+    private async Task RestoreLastAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", StorageKey);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return;
+            }
+            var saved = System.Text.Json.JsonSerializer.Deserialize<ConsolePrefs>(json);
+            if (saved is null)
+            {
+                return;
+            }
+            _lastCommand = saved.Command ?? string.Empty;
+            _arguments = saved.Arguments ?? string.Empty;
+            // recompõe o comando "base" (sem os argumentos) para o botão Executar
+            _baseArgs = DeriveBaseArgs(_lastCommand, _arguments);
+            StateHasChanged();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+            // JSRuntime indisponível no pré-render
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+    }
+
+    private async Task PersistLastAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", StorageKey,
+                System.Text.Json.JsonSerializer.Serialize(new ConsolePrefs(_lastCommand, _arguments)));
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private sealed record ConsolePrefs(string? Command, string? Arguments);
+
+    /// <summary>
+    /// Recupera o comando base a partir do comando completo gravado (remove o sufixo
+    /// de argumentos). Melhor esforço: se não achar, devolve o comando inteiro.
+    /// </summary>
+    private static string DeriveBaseArgs(string command, string arguments)
+    {
+        if (command.Length == 0)
+        {
+            return string.Empty;
+        }
+        var args = arguments.Trim();
+        if (args.Length == 0)
+        {
+            return command;
+        }
+        var idx = command.LastIndexOf(args, StringComparison.OrdinalIgnoreCase);
+        return idx > 0 ? command[..idx].TrimEnd() : command;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        BuildRun.LineReceived -= OnLineReceived;
+        BuildRun.Finished -= OnFinished;
+        Ui.Changed -= OnUiStateChanged;
+        StopTicker();
+    }
+}

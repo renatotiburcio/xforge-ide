@@ -1,0 +1,151 @@
+@inherits LayoutComponentBase
+@using XForge.DesignSystem.Components.Layout.Shell
+@inject IdeModules Modules
+@inject ThemeState Theme
+@inject IdeUiState Ui
+@inject NavigationManager Nav
+@inject XForge.Ide.Application.Services.ProjectService Projects
+@inject IdeEditorPreferences EditorPreferences
+
+@* Acessibilidade: atalho para ir direto ao conteúdo (primeiro elemento focável) *@
+<a href="#main-content" class="ide-skiplink">Ir para o conteúdo</a>
+
+<XFAppShell Theme="@Theme.Current" FullViewport="true" MainClass="@MainClass">
+    <Rail>
+        <XFRail Items="@Modules.RailItems" />
+    </Rail>
+    <Sidebar>
+        <XFSidebar>
+            <Header>
+                <span>@SidebarTitle</span>
+            </Header>
+            <ChildContent>
+                <XFMenu Items="@SidebarMenuItems"
+                        Variant="XFMenuVariant.Sidebar"
+                        Size="XFSize.Md"
+                        AriaLabel="@SidebarTitle"
+                        SelectedId="@SelectedMenuId" />
+            </ChildContent>
+        </XFSidebar>
+    </Sidebar>
+    <AppBar>
+        <XFAppBar>
+            <div class="flex items-center gap-3">
+                <span class="font-bold text-text-primary">XForge <span class="text-primary">IDE</span></span>
+                <span class="text-text-muted text-sm">— @SidebarTitle</span>
+            </div>
+            <div class="flex items-center gap-3">
+                @if (Ui.CurrentProject is { } project)
+                {
+                    <span class="text-sm text-text-secondary">@project.Name</span>
+                }
+                <XFTooltip Text="Alternar tema (claro/escuro)" Position="XFTooltipPosition.Bottom">
+                    <button class="ide-icon-btn" aria-label="Alternar tema" @onclick="async () => await Theme.ToggleAsync()">
+                        @if (Theme.Current == "dark")
+                        {
+                            @((MarkupString)IconSun)
+                        }
+                        else
+                        {
+                            @((MarkupString)IconMoon)
+                        }
+                    </button>
+                </XFTooltip>
+            </div>
+        </XFAppBar>
+    </AppBar>
+    <ChildContent>@Body</ChildContent>
+    <Footer>
+        <XFFooter AppName="XForge IDE"
+                  Environment="Desenvolvimento"
+                  Version="v0.1.0-m1"
+                  StatusText="@Ui.StatusText"
+                  UserName="@_userName" />
+    </Footer>
+</XFAppShell>
+
+@code {
+    private string _brand = "home";
+
+    // Ícones de contorno estilo iOS (stroke, sem preenchimento)
+    private const string IconMoon =
+        """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>""";
+
+    private string _userName = Environment.UserName;
+
+    private const string IconSun =
+        """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>""";
+
+    private string SidebarTitle => IdeModules.SidebarTitle(_brand);
+
+    // Somente a rota exata do editor ocupa toda a área útil (padrão VS Code):
+    // sem padding e com overflow escondido — cada painel rola sozinho.
+    // Sub-rotas (/code/search, /code/diff) são páginas de lista com padding normal.
+    private bool IsEditorRoute =>
+        new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').Equals("/code", StringComparison.OrdinalIgnoreCase);
+
+    private string MainClass => IsEditorRoute
+        ? "flex-1 min-h-0 overflow-hidden relative"
+        : "flex-1 overflow-y-auto overflow-x-hidden p-6 relative";
+
+    private string? SelectedMenuId => SidebarMenuItems.FirstOrDefault(i => i.Selected)?.Id;
+
+    private IReadOnlyList<XFMenuItem> SidebarMenuItems
+    {
+        get
+        {
+            var path = new Uri(Nav.Uri).AbsolutePath.TrimEnd('/');
+            return IdeModules.SidebarItems(_brand)
+                .Select(x => new XFMenuItem
+                {
+                    Id = x.Href,
+                    Text = x.Label,
+                    Href = x.Href,
+                    Badge = x.Milestone,
+                    BadgeTone = XFSemanticColor.Info,
+                    Match = NavLinkMatch.Prefix,
+                    Selected = string.Equals(x.Href.TrimEnd('/'), path, StringComparison.OrdinalIgnoreCase),
+                })
+                .ToList();
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        UpdateBrand();
+        Nav.LocationChanged += (_, _) => { UpdateBrand(); InvokeAsync(StateHasChanged); };
+        Theme.Changed += () => InvokeAsync(StateHasChanged);
+        Ui.Changed += () => InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        await Theme.InitializeAsync();
+        await EditorPreferences.LoadAsync();
+
+        // Restaura o último projeto do localStorage e recarrega do banco (dados frescos)
+        var restored = await Ui.TryRestoreAsync(async id =>
+        {
+            var p = await Projects.GetAsync(id);
+            return p;
+        });
+        if (!restored)
+        {
+            Ui.SetStatus("Pronto");
+        }
+    }
+
+    private void UpdateBrand()
+    {
+        var path = new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant();
+        var item = Modules.RailItems.FirstOrDefault(i =>
+            i.RoutePrefixes?.Any(p =>
+                path == p || path.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase)) == true);
+        _brand = item?.Brand ?? "home";
+    }
+}

@@ -1,0 +1,613 @@
+@page "/data"
+@rendermode InteractiveServer
+@using XForge.Ide.Application.Services
+@using XForge.Ide.Application.Dto
+@using XForge.Ide.Core.Enums
+@using XForge.Ide.App.Components
+@inject DictionaryService Dictionaries
+@inject IdeUiState Ui
+@inject XForge.Ide.Application.Services.ProjectService Projects
+
+<PageTitle>XForge IDE — Data Designer</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+    <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Designer de Dados</XFTypography>
+
+    @if (Ui.CurrentProject is null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                    Abra um projeto em <b>Projetos</b> para trabalhar no dicionário de dados.
+                </XFTypography>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        @* ---------------------------------------------------------- Dicionários *@
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                    <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                        Dicionários de @Ui.CurrentProject.Name
+                    </XFTypography>
+                    <XFButton Text="Novo dicionário" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
+                              OnClick="OpenDictModalAsync" />
+                </XFStack>
+
+                @if (_message is not null)
+                {
+                    <div role="status" aria-live="polite"
+                         class="mt-3 border border-info/30 bg-info/10 text-info-text rounded-md px-4 py-2 text-sm">@_message</div>
+                }
+
+                @if (_dictionaries.Count == 0)
+                {
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="mt-3">
+                        Nenhum dicionário. Crie um ou importe um banco SQLite em <b>Importar banco</b>.
+                    </XFTypography>
+                }
+                else
+                {
+                    <XFTable Striped="true" Hoverable="true" Compact="true" Class="mt-3">
+                        <XFTableHeader>
+                            <XFTableRow>
+                                <XFTableCell Header="true">Nome</XFTableCell>
+                                <XFTableCell Header="true">Entidades</XFTableCell>
+                                <XFTableCell Header="true">Versão</XFTableCell>
+                                <XFTableCell Header="true">Ações</XFTableCell>
+                            </XFTableRow>
+                        </XFTableHeader>
+                        <XFTableBody>
+                            @foreach (var d in VisibleDictionaries)
+                            {
+                                <XFTableRow>
+                                    <XFTableCell>@d.Name</XFTableCell>
+                                    <XFTableCell>@d.EntityCount</XFTableCell>
+                                    <XFTableCell>v@(d.Version)</XFTableCell>
+                                    <XFTableCell>
+                                        <div class="flex gap-2">
+                                            <XFButton Text="Abrir" AriaLabel="@($"Abrir dicionário {d.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                                                      OnClick="() => OpenDictionaryAsync(d)" />
+                                            <XFButton Text="Excluir" AriaLabel="@($"Excluir dicionário {d.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                                                      OnClick="() => AskDeleteDictAsync(d)" />
+                                        </div>
+                                    </XFTableCell>
+                                </XFTableRow>
+                            }
+                        </XFTableBody>
+                    </XFTable>
+
+                    <DataPager TotalItems="_dictionaries.Count" Page="_dictionaryPage" PageSize="PageSize"
+                               PageChanged="OnDictionaryPageChanged" />
+                }
+            </ChildContent>
+        </XFCard>
+
+        @* ------------------------------------------------------------ Entidades *@
+        @if (_currentDictionary is not null)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+                <ChildContent>
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                        <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                            Entidades — @_currentDictionary.Name
+                        </XFTypography>
+                        <XFButton Text="Nova entidade" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
+                                  OnClick="OpenEntityModalAsync" />
+                    </XFStack>
+
+                    @if (_entities.Count > 0)
+                    {
+                        <XFTable Striped="true" Hoverable="true" Compact="true" Class="mt-3">
+                            <XFTableHeader>
+                                <XFTableRow>
+                                    <XFTableCell Header="true">Entidade</XFTableCell>
+                                    <XFTableCell Header="true">Tabela</XFTableCell>
+                                    <XFTableCell Header="true">Campos</XFTableCell>
+                                    <XFTableCell Header="true">Ações</XFTableCell>
+                                </XFTableRow>
+                            </XFTableHeader>
+                            <XFTableBody>
+                                @foreach (var e in VisibleEntities)
+                                {
+                                    <XFTableRow>
+                                        <XFTableCell>@e.Name</XFTableCell>
+                                        <XFTableCell><span class="text-text-muted text-sm">@e.TableName</span></XFTableCell>
+                                        <XFTableCell>@e.Fields.Count</XFTableCell>
+                                        <XFTableCell>
+                                            <div class="flex gap-2">
+                                                <XFButton Text="Editar" AriaLabel="@($"Editar entidade {e.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                                                          OnClick="() => OpenEntityAsync(e)" />
+                                                <XFButton Text="Excluir" AriaLabel="@($"Excluir entidade {e.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                                                          OnClick="() => AskDeleteEntityAsync(e)" />
+                                            </div>
+                                        </XFTableCell>
+                                    </XFTableRow>
+                                }
+                            </XFTableBody>
+                        </XFTable>
+
+                        <DataPager TotalItems="_entities.Count" Page="_entityPage" PageSize="PageSize"
+                                   PageChanged="OnEntityPageChanged" />
+                    }
+                </ChildContent>
+            </XFCard>
+        }
+
+        @* -------------------------------------------------- Relacionamentos *@
+        @if (_currentDictionary is not null && _entities.Count > 1)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+                <ChildContent>
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                        <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                            Relacionamentos de @_currentDictionary.Name
+                        </XFTypography>
+                        <XFButton Text="Nova relação" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
+                                  OnClick="OpenRelationModalAsync" />
+                    </XFStack>
+
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="mt-1">
+                        Definem como as entidades se ligam (1:N, N:1, 1:1, N:N). Base para master-detail,
+                        chaves estrangeiras e navegações do EF Core.
+                    </XFTypography>
+
+                    <XFTable Striped="true" Hoverable="true" Compact="true" Class="mt-3">
+                        <XFTableHeader>
+                            <XFTableRow>
+                                <XFTableCell Header="true">Origem</XFTableCell>
+                                <XFTableCell Header="true">Tipo</XFTableCell>
+                                <XFTableCell Header="true">Destino</XFTableCell>
+                                <XFTableCell Header="true"></XFTableCell>
+                            </XFTableRow>
+                        </XFTableHeader>
+                        <XFTableBody>
+                            @if (_relations.Count == 0)
+                            {
+                                <XFTableRow>
+                                    <XFTableCell ColumnSpan="4">
+                                        <span class="text-text-muted text-sm">Nenhum relacionamento definido.</span>
+                                    </XFTableCell>
+                                </XFTableRow>
+                            }
+                            @foreach (var r in VisibleRelations)
+                            {
+                                <XFTableRow>
+                                    <XFTableCell>@r.FromEntity</XFTableCell>
+                                    <XFTableCell>
+                                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="@r.Kind" />
+                                    </XFTableCell>
+                                    <XFTableCell>@r.ToEntity</XFTableCell>
+                                    <XFTableCell>
+                                        <XFButton Text="Excluir" AriaLabel="@($"Excluir relação {r.FromEntity} para {r.ToEntity}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                                                  OnClick="() => AskDeleteRelationAsync(r)" />
+                                    </XFTableCell>
+                                </XFTableRow>
+                            }
+                        </XFTableBody>
+                    </XFTable>
+
+                    <DataPager TotalItems="_relations.Count" Page="_relationPage" PageSize="PageSize"
+                               PageChanged="OnRelationPageChanged" />
+                </ChildContent>
+            </XFCard>
+        }
+
+        @* ------------------------------------------------------- Editor de entidade *@
+        @if (_currentEntity is not null)
+        {
+            <EntityEditor Entity="@_currentEntity" Changed="OnEntityChangedAsync" />
+        }
+    }
+</XFStack>
+
+@* ======================================================== Modal: nova relação *@
+<Modal Open="@_showRelationModal" OpenChanged="OnRelationModalChanged"
+       Title="Nova relação" Description="Ligue duas entidades do dicionário."
+       ConfirmText="Criar relação" ConfirmAction="CreateRelationAsync">
+    <XFCombobox TItem="string" TValue="string" Label="Entidade origem *" Placeholder="Selecione"
+                Items="@_entityNames" Value="@_relationFrom"
+                ValueChanged="(string? v) => _relationFrom = v ?? string.Empty" />
+    <XFCombobox TItem="string" TValue="string" Label="Entidade destino *" Placeholder="Selecione"
+                Items="@_entityNames" Value="@_relationTo"
+                ValueChanged="(string? v) => _relationTo = v ?? string.Empty" />
+    <XFCombobox TItem="string" TValue="string" Label="Tipo *"
+                Items="@_relationKinds"
+                Value="@_relationKind" ValueChanged="OnRelationKindChanged" />
+</Modal>
+
+@* =========================================================== Modal: novo dicionário *@
+<Modal Open="@_showDictModal" OpenChanged="OnDictModalChanged"
+       Title="Novo dicionário" Description="Agrupa as entidades do projeto (sucessor do .DCT do Clarion)"
+       ConfirmText="Criar dicionário" ConfirmAction="CreateDictAsync">
+    <XFTextInput Label="Nome *" Placeholder="Principal"
+                 Value="@_dictName" ValueChanged="(string v) => _dictName = v ?? string.Empty" />
+</Modal>
+
+@* ============================================================= Modal: nova entidade *@
+<Modal Open="@_showEntityModal" OpenChanged="OnEntityModalChanged"
+       Title="Nova entidade" Description="A chave primária Id (Guid) é criada automaticamente"
+       ConfirmText="Criar entidade" ConfirmAction="CreateEntityAsync">
+    <div class="grid gap-4 md:grid-cols-2">
+        <XFTextInput Label="Nome da entidade *" Placeholder="Customer"
+                     Value="@_entityName" ValueChanged="(string v) => _entityName = v ?? string.Empty" />
+        <XFTextInput Label="Tabela (opcional)" Placeholder="Customers"
+                     Value="@_entityTable" ValueChanged="(string v) => _entityTable = v ?? string.Empty" />
+        <XFTextInput Label="Prefixo (estilo Clarion, opcional)" Placeholder="CUS"
+                     Value="@_entityPrefix" ValueChanged="(string v) => _entityPrefix = v" />
+    </div>
+</Modal>
+
+@* ====================================================== Modal: confirmar exclusões *@
+<ConfirmDialog Open="@_showDeleteConfirm" OpenChanged="OnDeleteConfirmChanged"
+               Title="@_deleteTitle"
+               ConfirmMessage="@_deleteMessage"
+               TargetName="@_deleteTargetName"
+               ConfirmText="Excluir"
+               OnConfirm="DeleteConfirmedAsync" />
+
+@code {
+    private IReadOnlyList<DictionaryDto> _dictionaries = Array.Empty<DictionaryDto>();
+    private DictionaryDto? _currentDictionary;
+    private IReadOnlyList<EntityDto> _entities = Array.Empty<EntityDto>();
+    private EntityDto? _currentEntity;
+    private IReadOnlyList<EntityRelationDto> _relations = Array.Empty<EntityRelationDto>();
+    private int _dictionaryPage = 1;
+    private int _entityPage = 1;
+    private int _relationPage = 1;
+    private const int PageSize = 20;
+
+    private IEnumerable<DictionaryDto> VisibleDictionaries =>
+        _dictionaries.Skip((_dictionaryPage - 1) * PageSize).Take(PageSize);
+
+    private IEnumerable<EntityDto> VisibleEntities =>
+        _entities.Skip((_entityPage - 1) * PageSize).Take(PageSize);
+
+    private IEnumerable<EntityRelationDto> VisibleRelations =>
+        _relations.Skip((_relationPage - 1) * PageSize).Take(PageSize);
+
+    private Task OnDictionaryPageChanged(int page)
+    {
+        _dictionaryPage = page;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OnEntityPageChanged(int page)
+    {
+        _entityPage = page;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OnRelationPageChanged(int page)
+    {
+        _relationPage = page;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private string? _message;
+    private List<string> _entityNames = new();
+
+    // Modal relação
+    private bool _showRelationModal;
+    private string _relationFrom = string.Empty;
+    private string _relationTo = string.Empty;
+    private string _relationKind = "OneToMany";
+    private static readonly string[] _relationKinds = { "OneToMany", "ManyToOne", "OneToOne", "ManyToMany" };
+
+    private void OnRelationKindChanged(string? value)
+        => _relationKind = value ?? "OneToMany";
+
+    private Task OpenRelationModalAsync()
+    {
+        _entityNames = _entities.Select(e => e.Name).OrderBy(n => n).ToList();
+        _relationFrom = _entityNames.FirstOrDefault() ?? string.Empty;
+        _relationTo = _entityNames.Skip(1).FirstOrDefault() ?? string.Empty;
+        _showRelationModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnRelationModalChanged(bool open)
+    {
+        _showRelationModal = open;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task CreateRelationAsync()
+    {
+        if (_currentDictionary is null || _relationFrom.Length == 0 || _relationTo.Length == 0)
+        {
+            _message = "Selecione as entidades de origem e destino.";
+            StateHasChanged();
+            return;
+        }
+        if (string.Equals(_relationFrom, _relationTo, StringComparison.OrdinalIgnoreCase))
+        {
+            _message = "A relação precisa ligar duas entidades diferentes.";
+            StateHasChanged();
+            return;
+        }
+
+        var from = _entities.FirstOrDefault(e => e.Name == _relationFrom);
+        var to = _entities.FirstOrDefault(e => e.Name == _relationTo);
+        if (from is null || to is null)
+        {
+            _message = "Selecione entidades válidas do dicionário.";
+            StateHasChanged();
+            return;
+        }
+
+        if (!Enum.TryParse<EntityRelationKind>(_relationKind, out var kind))
+        {
+            kind = EntityRelationKind.OneToMany;
+        }
+
+        var result = await Dictionaries.AddRelationAsync(new CreateRelationRequest(
+            _currentDictionary.Id, from.Id, to.Id, kind, "[]"));
+        _message = result.IsSuccess ? "Relação criada." : result.Error ?? "Falha ao criar relação.";
+        _showRelationModal = false;
+        await LoadRelationsAsync();
+        await ReloadDictionariesAsync();
+        StateHasChanged();
+    }
+
+    private async Task LoadRelationsAsync()
+    {
+        if (_currentDictionary is null)
+        {
+            _relations = Array.Empty<EntityRelationDto>();
+            return;
+        }
+        _relations = await Dictionaries.ListRelationsAsync(_currentDictionary.Id);
+        _relationPage = 1;
+    }
+
+    private async Task AskDeleteRelationAsync(EntityRelationDto r)
+    {
+        _deleteTitle = "Excluir relação";
+        _deleteMessage = $"A ligação entre {r.FromEntity} e {r.ToEntity} será removida.";
+        _deleteTargetName = $"{r.FromEntity} → {r.ToEntity}";
+        _deleteAction = async () =>
+        {
+            await Dictionaries.DeleteRelationAsync(r.Id);
+            await LoadRelationsAsync();
+        await ReloadDictionariesAsync();
+        };
+        _showDeleteConfirm = true;
+        StateHasChanged();
+    }
+
+    // Modal dicionário
+    private bool _showDictModal;
+    private string _dictName = string.Empty;
+
+    // Modal entidade
+    private bool _showEntityModal;
+    private string _entityName = string.Empty;
+    private string _entityTable = string.Empty;
+    private string? _entityPrefix;
+
+    // Confirmação de exclusão
+    private bool _showDeleteConfirm;
+    private string _deleteTitle = "Confirmar exclusão";
+    private string _deleteMessage = string.Empty;
+    private string? _deleteTargetName;
+    private Func<Task>? _deleteAction;
+
+    private Guid? _lastProjectId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Ui.Changed += OnUiStateChanged;
+        _lastProjectId = Ui.CurrentProject?.Id;
+        var restored = await ProjectRestorer.TryRestoreAsync(Ui, id => Projects.GetAsync(id));
+        if (restored || Ui.CurrentProject is not null)
+        {
+            await ReloadDictionariesAsync();
+        }
+    }
+
+    private async void OnUiStateChanged()
+    {
+        var currentId = Ui.CurrentProject?.Id;
+        if (currentId == _lastProjectId)
+        {
+            return;
+        }
+        _lastProjectId = currentId;
+        await ReloadDictionariesAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ReloadDictionariesAsync()
+    {
+        if (Ui.CurrentProject is null) return;
+        _dictionaries = await Dictionaries.ListByProjectAsync(Ui.CurrentProject.Id);
+        _dictionaryPage = 1;
+        if (_currentDictionary is not null)
+        {
+            _currentDictionary = _dictionaries.FirstOrDefault(d => d.Id == _currentDictionary.Id) ?? _currentDictionary;
+        }
+    }
+
+    // ------------------------------------------------------------- Dicionários
+
+    private Task OpenDictModalAsync()
+    {
+        _dictName = string.Empty;
+        _showDictModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnDictModalChanged(bool open)
+        {
+            _showDictModal = open;
+            return Task.CompletedTask;
+        }
+
+    private async Task CreateDictAsync()
+    {
+        if (Ui.CurrentProject is null) return;
+        if (string.IsNullOrWhiteSpace(_dictName))
+        {
+            _message = "Informe o nome do dicionário.";
+            StateHasChanged();
+            return;
+        }
+
+        var result = await Dictionaries.CreateAsync(new(Ui.CurrentProject.Id, _dictName.Trim()));
+        if (result.IsSuccess)
+        {
+            _showDictModal = false;
+            await ReloadDictionariesAsync();
+            await OpenDictionaryAsync(result.Value);
+            _message = $"Dicionário '{result.Value.Name}' criado.";
+        }
+        else
+        {
+            _message = result.Error;
+        }
+    }
+
+    private async Task OpenDictionaryAsync(DictionaryDto d)
+    {
+        _currentDictionary = d;
+        _currentEntity = null;
+        _entities = await Dictionaries.ListEntitiesAsync(d.Id);
+        _entityPage = 1;
+        await LoadRelationsAsync();
+        await ReloadDictionariesAsync();
+    }
+
+    private Task AskDeleteDictAsync(DictionaryDto d)
+    {
+        _deleteTitle = "Excluir dicionário";
+        _deleteMessage = "Todas as entidades, campos e chaves deste dicionário serão removidos.";
+        _deleteTargetName = d.Name;
+        _deleteAction = async () =>
+        {
+            await Dictionaries.DeleteAsync(d.Id);
+            if (_currentDictionary?.Id == d.Id)
+            {
+                _currentDictionary = null;
+                _entities = Array.Empty<EntityDto>();
+                _currentEntity = null;
+            }
+            await ReloadDictionariesAsync();
+            _message = $"Dicionário '{d.Name}' excluído.";
+        };
+        _showDeleteConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    // --------------------------------------------------------------- Entidades
+
+    private Task OpenEntityModalAsync()
+    {
+        _entityName = string.Empty;
+        _entityTable = string.Empty;
+        _entityPrefix = null;
+        _showEntityModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnEntityModalChanged(bool open)
+        {
+            _showEntityModal = open;
+            return Task.CompletedTask;
+        }
+
+    private async Task CreateEntityAsync()
+    {
+        if (_currentDictionary is null) return;
+        if (string.IsNullOrWhiteSpace(_entityName))
+        {
+            _message = "Informe o nome da entidade.";
+            StateHasChanged();
+            return;
+        }
+
+        var result = await Dictionaries.AddEntityAsync(new(
+            _currentDictionary.Id, _entityName.Trim(), _entityTable.Trim(),
+            "Sqlite", string.IsNullOrWhiteSpace(_entityPrefix) ? null : _entityPrefix.Trim(), null));
+        if (result.IsSuccess)
+        {
+            _showEntityModal = false;
+            _entities = await Dictionaries.ListEntitiesAsync(_currentDictionary.Id);
+            _entityPage = 1;
+        await LoadRelationsAsync();
+        await ReloadDictionariesAsync();
+            _message = $"Entidade '{result.Value.Name}' criada (com chave primária Id).";
+        }
+        else
+        {
+            _message = result.Error;
+        }
+    }
+
+    private async Task OpenEntityAsync(EntityDto e)
+    {
+        _currentEntity = await Dictionaries.GetEntityAsync(e.Id);
+    }
+
+    private Task AskDeleteEntityAsync(EntityDto e)
+    {
+        _deleteTitle = "Excluir entidade";
+        _deleteMessage = "A entidade e todos os seus campos serão removidos do dicionário.";
+        _deleteTargetName = e.Name;
+        _deleteAction = async () =>
+        {
+            await Dictionaries.DeleteEntityAsync(e.Id);
+            if (_currentEntity?.Id == e.Id) _currentEntity = null;
+            if (_currentDictionary is not null)
+            {
+                _entities = await Dictionaries.ListEntitiesAsync(_currentDictionary.Id);
+        await LoadRelationsAsync();
+        await ReloadDictionariesAsync();
+            }
+            _message = $"Entidade '{e.Name}' excluída.";
+        };
+        _showDeleteConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    // ------------------------------------------------------------- Confirmação
+
+    private Task OnDeleteConfirmChanged(bool open)
+    {
+        _showDeleteConfirm = open;
+        if (!open)
+        {
+            _deleteAction = null;
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_deleteAction is null) return;
+        var action = _deleteAction;
+        _deleteAction = null;
+        await action();
+    }
+
+    private async Task OnEntityChangedAsync()
+    {
+        if (_currentEntity is not null)
+        {
+            _currentEntity = await Dictionaries.GetEntityAsync(_currentEntity.Id);
+            if (_currentDictionary is not null)
+            {
+                _entities = await Dictionaries.ListEntitiesAsync(_currentDictionary.Id);
+        await LoadRelationsAsync();
+        await ReloadDictionariesAsync();
+            }
+            StateHasChanged();
+        }
+    }
+}

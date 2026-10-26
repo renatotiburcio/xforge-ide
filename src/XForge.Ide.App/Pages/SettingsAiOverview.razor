@@ -1,0 +1,159 @@
+@page "/settings/ai"
+@rendermode InteractiveServer
+@using XForge.Ide.Application.Services.Ai
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.Forms.Combobox
+@using XForge.DesignSystem.Components.Forms.TextInput
+@using XForge.DesignSystem.Components.Forms.NumberInput
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Core.Primitives
+@inject AiSettingsStore Store
+@inject IdeUiState Ui
+
+<PageTitle>XForge IDE — Provedores de IA</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+    <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Provedores de IA</XFTypography>
+
+    @if (_message is not null)
+    {
+        <div role="status" aria-live="polite"
+             class="border border-info/30 bg-info/10 text-info-text rounded-md px-4 py-2 text-sm">@_message</div>
+    }
+    @if (_error is not null)
+    {
+        <div role="alert" aria-live="assertive"
+             class="border border-danger/30 bg-danger/10 text-danger-text rounded-md px-4 py-2 text-sm">@_error</div>
+    }
+
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true">
+
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                    <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Modelo ativo</XFTypography>
+                    @if (_hasKey)
+                    {
+                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Success" Text="Chave configurada" />
+                    }
+                    else
+                    {
+                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Warning" Text="Sem chave (só local)" />
+                    }
+                </XFStack>
+
+                <div class="grid gap-4 md:grid-cols-2">
+                    <XFCombobox TItem="string" TValue="string"
+                                Label="Provedor"
+                                Items="@_providerLabels"
+                                @bind-Value="_providerId" />
+
+                    <XFTextInput Label="Modelo" @bind-Value="_model" Placeholder="ex.: llama3.1, gpt-4o-mini" />
+
+                    <XFTextInput Label="Endpoint" @bind-Value="_endpoint" Placeholder="https://…/v1" />
+
+                    <XFTextInput Label="Chave de API" @bind-Value="_apiKey" Placeholder="••••••••" Type="XFTextInputType.Password" />
+
+                    <XFNumberInput Label="Temperatura" @bind-Value="_temperature" Step="0.1m" Min="0m" Max="1m" />
+
+                    <XFNumberInput Label="Máximo de tokens" @bind-Value="_maxTokens" Step="256m" Min="256m" Max="32000m" />
+                </div>
+
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                    <XFButton Text="Salvar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary" OnClick="SaveAsync" />
+                    <XFButton Text="Restaurar padrão" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" OnClick="ResetAsync" />
+                </XFStack>
+
+                <XFTypography Variant="XFTypographyVariant.Caption" Color="XFTypographyColor.Muted">
+                    A configuração (incluindo a chave) fica em <b>@Store.FilePath</b> — fora do repositório.
+                    Para modelos locais (Ollama) o endpoint padrão é http://localhost:11434/v1.
+                </XFTypography>
+            </XFStack>
+        </ChildContent>
+    </XFCard>
+
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Como o assistente usa o contexto</XFTypography>
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="mt-2">
+                O painel do editor envia: o projeto aberto, a lista de arquivos, o <b>arquivo ativo</b> completo e o
+                trecho <b>selecionado</b>. Ações rápidas (explicar, refatorar, revisar, gerar testes, criar
+                funcionalidade e corrigir) montam o prompt a partir desse contexto.
+            </XFTypography>
+        </ChildContent>
+    </XFCard>
+</XFStack>
+
+@code {
+    private readonly List<string> _providerLabels = new();
+    private string _providerId = "ollama";
+    private string _model = string.Empty;
+    private string _endpoint = string.Empty;
+    private string _apiKey = string.Empty;
+    private decimal _temperature = 0.2m;
+    private decimal _maxTokens = 4096m;
+    private bool _hasKey;
+    private string? _message;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        _providerLabels.AddRange(AiSettings.Presets.Select(p => p.Label));
+
+        var s = Store.Get();
+        _providerId = s.Provider;
+        _model = s.Model;
+        _endpoint = s.Endpoint;
+        _apiKey = s.ApiKey ?? string.Empty;
+        _temperature = (decimal)s.Temperature;
+        _maxTokens = s.MaxTokens;
+        _hasKey = !string.IsNullOrWhiteSpace(s.ApiKey);
+    }
+
+    private Task SaveAsync()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_model))
+        {
+            _error = "Informe o modelo do provedor.";
+            StateHasChanged();
+            return Task.CompletedTask;
+        }
+
+        if (string.IsNullOrWhiteSpace(_endpoint))
+        {
+            _error = "Informe o endpoint do provedor.";
+            StateHasChanged();
+            return Task.CompletedTask;
+        }
+
+        var s = Store.Get();
+        s.Provider = _providerId;
+        s.Model = _model.Trim();
+        s.Endpoint = _endpoint.Trim();
+        s.ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey.Trim();
+        s.Temperature = _temperature is < 0m or > 1m ? 0.2 : (double)_temperature;
+        s.MaxTokens = _maxTokens < 256m ? 256 : (int)_maxTokens;
+        Store.Save(s);
+        _hasKey = s.ApiKey is not null;
+        _message = $"Configuração salva ({s.Provider} / {s.Model}).";
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task ResetAsync()
+    {
+        var preset = new AiSettings().PresetFor(_providerId);
+        if (preset is not null)
+        {
+            _endpoint = preset.DefaultEndpoint;
+            _model = preset.DefaultModel;
+        }
+        _message = "Endpoint e modelo restaurados ao padrão do provedor. Clique em Salvar para aplicar.";
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+}

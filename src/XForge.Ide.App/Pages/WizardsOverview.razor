@@ -1,0 +1,179 @@
+@page "/wizards"
+@rendermode InteractiveServer
+@using XForge.Ide.Application.Services
+@using XForge.Ide.Application.Dto
+@using XForge.Ide.Core.Enums
+@using XForge.Ide.Core.Results
+@using XForge.DesignSystem.Components.Forms.Checkbox
+@inject ScaffoldingService Scaffolding
+@inject IdeUiState Ui
+@inject XForge.Ide.Application.Services.ProjectService ProjectSvc
+
+
+
+<PageTitle>XForge IDE — Wizards</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+    <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Wizards RAD</XFTypography>
+
+    @if (Ui.CurrentProject is null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                    Abra um projeto em <b>Projetos</b> antes de executar um wizard (o resultado é registrado na IDE).
+                </XFTypography>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                    Novo aplicativo — Clean Architecture
+                </XFTypography>
+                <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                    Gera solution completa: Domain · Application (CQRS + repositório genérico) · Infrastructure (EF Core) · Api (REST@(Ui.CurrentProject is not null ? ", Identity+JWT opcional" : string.Empty)) · Client (Blazor WASM) + testes.
+                </XFTypography>
+
+                <div class="grid gap-4 md:grid-cols-2 mt-4">
+                    <XFTextInput Label="Nome do aplicativo *" Placeholder="Meu Sistema"
+                                  Value="@_name" ValueChanged="@(v => _name = v ?? string.Empty)" />
+                    <PickerField Mode="folder" Label="Diretório de saída *" Placeholder="C:\Projetos"
+                                 RecentKey="xf-recent-folders" Value="@_outputPath" ValueChanged="@(v => _outputPath = v ?? string.Empty)" />
+                    <XFCombobox TItem="string" TValue="string" Label="Banco de dados" Placeholder="Selecione ou pesquise"
+                              Items="@_providers" TextSelector="@_providerText" ValueSelector="@_providerValue"
+                              Value="@_provider" ValueChanged="OnProviderChanged" />
+                    <XFTextInput Label="Connection string (opcional)" Placeholder="Padrão do provider"
+                                  Value="@_connString" ValueChanged="@(v => _connString = v)" />
+                    <XFCheckbox Label="ASP.NET Core Identity + JWT" Description="AccountController com registro/login"
+                                Value="@_useIdentity" ValueChanged="@(v => _useIdentity = v ?? true)" />
+                    <XFCheckbox Label="Validar com dotnet build após gerar"
+                                Description="Recomendado (leva ~30s)"
+                                Value="@_validateBuild" ValueChanged="@(v => _validateBuild = v ?? true)" />
+                </div>
+
+                <div class="flex gap-2 mt-4 items-center">
+                    <XFButton Text="@(_busy ? "Gerando..." : "Gerar aplicação")"
+                              Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              Loading="@_busy" OnClick="GenerateAsync" />
+                    @if (_busy)
+                    {
+                        <span class="text-sm text-text-muted">Executando wizard — não feche esta página.</span>
+                    }
+                </div>
+            </ChildContent>
+        </XFCard>
+    }
+
+    @if (_result is not null)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                    Resultado
+                </XFTypography>
+                <XFBadge Variant="XFBadgeVariant.Solid"
+                         Color="@((_result.BuildSucceeded ?? false) ? XFBadgeColor.Success : XFBadgeColor.Warning)"
+                         Text="@((_result.BuildSucceeded ?? false) ? "Build OK" : "Sem validação de build")" />
+                <XFTypography Variant="XFTypographyVariant.Body2" Class="mt-2">@_result.SolutionPath</XFTypography>
+                <pre class="ide-console">@string.Join("\n", _result.Log)</pre>
+            </ChildContent>
+        </XFCard>
+    }
+
+    @if (_error is not null)
+    {
+        <div role="alert" aria-live="assertive"
+             class="border border-danger/30 bg-danger/10 text-danger-text rounded-md px-4 py-2 text-sm">@_error</div>
+    }
+</XFStack>
+
+@code {
+    private string _name = string.Empty;
+    private string _outputPath = string.Empty;
+    private string _provider = "Sqlite";
+    private string? _connString;
+
+    /// <summary>Ao trocar o banco, sugere a connection string padrão do provedor.</summary>
+    private void OnProviderChanged(string? value)
+    {
+        _provider = value ?? "Sqlite";
+        _connString ??= _provider switch
+        {
+            "Sqlite" => "Data Source=app.db",
+            "PostgreSql" => "Host=localhost;Database=app;Username=postgres;Password=postgres",
+            "MySql" => "Server=localhost;Database=app;User=root;Password=root",
+            _ => null,
+        };
+    }
+    private bool? _useIdentity = true;
+    private bool? _validateBuild = true;
+
+    private static readonly string[] _providers = ["Sqlite", "PostgreSql", "MySql", "SqlServer"];
+    private static readonly Func<string, string> _providerText = p => p;
+    private static readonly Func<string, string?> _providerValue = p => p;
+
+    private bool _busy;
+    private string? _error;
+    private WizardResultDto? _result;
+
+    private async Task GenerateAsync()
+    {
+        if (Ui.CurrentProject is null)
+        {
+            _error = "Nenhum projeto aberto.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            _error = "Informe o nome do aplicativo.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_outputPath))
+        {
+            _error = "Informe o diretório de saída.";
+            return;
+        }
+
+        if (!System.IO.Path.IsPathFullyQualified(_outputPath.Trim()))
+        {
+            _error = "Informe um caminho absoluto para o diretório de saída.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _result = null;
+
+        var request = new NewAppWizardRequest(
+            Ui.CurrentProject.Id,
+            _name,
+            _outputPath,
+            Enum.Parse<ProviderKind>(_provider),
+            _connString,
+            _useIdentity ?? true,
+            _validateBuild ?? true,
+            null);
+
+        var result = await Scaffolding.GenerateNewAppAsync(request);
+
+        _busy = false;
+        if (result.IsSuccess)
+        {
+            _result = result.Value;
+            if (Ui.CurrentProject is null)
+            {
+                var opened = await ProjectSvc.OpenAsync(result.Value.ProjectId);
+                if (opened.IsSuccess) { Ui.SetProject(opened.Value); await Ui.PersistAsync(); }
+            }
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

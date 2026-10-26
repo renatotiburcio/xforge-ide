@@ -1,0 +1,191 @@
+@page "/settings"
+@rendermode InteractiveServer
+@using XForge.DesignSystem.Components.Forms.Combobox
+@using XForge.DesignSystem.Components.Forms.Checkbox
+@using XForge.Ide.App.Components
+@inject ThemeState Theme
+@inject IdeEditorPreferences Prefs
+
+<PageTitle>XForge IDE — Configurações</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+    <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Configurações</XFTypography>
+
+    @if (_saved)
+    {
+        <div role="status" aria-live="polite"
+             class="border border-success/30 bg-success/10 text-success-text rounded-md px-4 py-2 text-sm">
+            Preferências do editor salvas.
+        </div>
+    }
+
+    @* ---------------------------------------------------------------- Aparência *@
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Aparência</XFTypography>
+            <div class="flex items-center gap-4 mt-3">
+                <XFButton Text="@((Theme.Current == "dark") ? "Mudar para claro" : "Mudar para escuro")"
+                          Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                          OnClick="async () => await Theme.ToggleAsync()" />
+                <span class="text-sm text-text-muted">Tema atual: @Theme.Current (persistido em localStorage)</span>
+            </div>
+        </ChildContent>
+    </XFCard>
+
+    @* ------------------------------------------------------ Editor de código *@
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Editor de código</XFTypography>
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                Aplicadas ao Monaco no editor e nos diffs. Persistidas em localStorage.
+            </XFTypography>
+
+            <div class="grid gap-4 md:grid-cols-2 mt-3">
+                <XFCombobox TItem="int" TValue="int" Label="Tamanho da fonte"
+                            Items="@EditorPrefs.FontSizes"
+                            ValueSelector="@(v => v)" TextSelector="@(v => v.ToString())"
+                            Value="@_fontSize" ValueChanged="OnFontSizeChanged" />
+                <XFCombobox TItem="int" TValue="int" Label="Largura do tab"
+                            Items="@EditorPrefs.TabSizes"
+                            ValueSelector="@(v => v)" TextSelector="@(v => v.ToString())"
+                            Value="@_tabSize" ValueChanged="OnTabSizeChanged" />
+            </div>
+
+            <div class="grid gap-2 md:grid-cols-3 mt-2">
+                <XFCheckbox Label="Quebra de linha" Value="@_wordWrap" ValueChanged="OnWordWrapChanged" />
+                <XFCheckbox Label="Minimapa" Value="@_minimap" ValueChanged="OnMinimapChanged" />
+                <XFCheckbox Label="Números de linha" Value="@_lineNumbers" ValueChanged="OnLineNumbersChanged" />
+            </div>
+
+            <div class="mt-3 flex items-center gap-3">
+                <XFButton Text="Restaurar padrão" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                          OnClick="ResetAsync" />
+                <span class="text-sm text-text-muted">
+                    Fonte: @_fontSize px · Tab: @_tabSize espaços
+                </span>
+            </div>
+        </ChildContent>
+    </XFCard>
+
+    @* --------------------------------------------------------------- Atalhos *@
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Atalhos do editor</XFTypography>
+            <XFTable Striped="true" Compact="true" Class="mt-2">
+                <XFTableHeader>
+                    <XFTableRow>
+                        <XFTableCell Header="true">Atalho</XFTableCell>
+                        <XFTableCell Header="true">Ação</XFTableCell>
+                    </XFTableRow>
+                </XFTableHeader>
+                <XFTableBody>
+                    @foreach (var (key, action) in _shortcuts)
+                    {
+                        <XFTableRow>
+                            <XFTableCell><code class="text-xs">@key</code></XFTableCell>
+                            <XFTableCell>@action</XFTableCell>
+                        </XFTableRow>
+                    }
+                </XFTableBody>
+            </XFTable>
+        </ChildContent>
+    </XFCard>
+
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Provedores de IA</XFTypography>
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                OpenAI · Anthropic · Google · Ollama (local) · OpenRouter · Groq — configure em
+                <a href="/settings/ai">Provedores de IA</a>.
+            </XFTypography>
+        </ChildContent>
+    </XFCard>
+
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Git & GitHub</XFTypography>
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                Integração LibGit2Sharp + Octokit no marco M7. Token por usuário, via Credential Manager.
+            </XFTypography>
+        </ChildContent>
+    </XFCard>
+</XFStack>
+
+<ConfirmDialog Open="@_showResetConfirm" OpenChanged="OnResetConfirmChanged"
+               Title="Restaurar preferências do editor?"
+               ConfirmMessage="As preferências do editor voltarão aos valores padrão."
+               ConfirmText="Restaurar padrão"
+               OnConfirm="ConfirmResetAsync" />
+
+@code {
+    private int _fontSize = 13;
+    private int _tabSize = 4;
+    private bool _wordWrap;
+    private bool _minimap = true;
+    private bool _lineNumbers = true;
+    private bool _saved;
+    private bool _showResetConfirm;
+
+    private readonly (string Key, string Action)[] _shortcuts = new[]
+    {
+        ("Ctrl+S", "Salvar o arquivo ativo"),
+        ("Ctrl+` (crase)", "Abrir/fechar o painel de terminal"),
+        ("Ctrl+Shift+F", "Busca global no projeto"),
+        ("Ctrl+P", "Abrir arquivo rapidamente (quick open)"),
+        ("Ctrl+W", "Fechar a aba ativa"),
+        ("Duplo clique no divisor", "Maximizar/restaurar o painel inferior"),
+    };
+
+    protected override void OnInitialized()
+    {
+        var p = Prefs.Current;
+        _fontSize = p.FontSize;
+        _tabSize = p.TabSize;
+        _wordWrap = p.WordWrap;
+        _minimap = p.Minimap;
+        _lineNumbers = p.LineNumbers;
+    }
+
+    private async Task ApplyAsync()
+    {
+        await Prefs.SaveAsync(new EditorPrefs
+        {
+            FontSize = _fontSize,
+            TabSize = _tabSize,
+            WordWrap = _wordWrap,
+            Minimap = _minimap,
+            LineNumbers = _lineNumbers,
+        });
+        _saved = true;
+        StateHasChanged();
+    }
+
+    private void OnFontSizeChanged(int v) { _fontSize = v; _ = ApplyAsync(); }
+    private void OnTabSizeChanged(int v) { _tabSize = v; _ = ApplyAsync(); }
+    private void OnWordWrapChanged(bool? v) { _wordWrap = v ?? false; _ = ApplyAsync(); }
+    private void OnMinimapChanged(bool? v) { _minimap = v ?? true; _ = ApplyAsync(); }
+    private void OnLineNumbersChanged(bool? v) { _lineNumbers = v ?? true; _ = ApplyAsync(); }
+
+    private Task ResetAsync()
+    {
+        _showResetConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnResetConfirmChanged(bool open)
+    {
+        _showResetConfirm = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmResetAsync()
+    {
+        _showResetConfirm = false;
+        _fontSize = 13;
+        _tabSize = 4;
+        _wordWrap = false;
+        _minimap = true;
+        _lineNumbers = true;
+        await ApplyAsync();
+    }
+}

@@ -1,0 +1,55 @@
+@using XForge.DesignSystem.Components.Overlays.Dialog
+
+<XFDialog Open="@Open" OpenChanged="OnOpenChanged" Title="@Title"
+          Size="XFOverlaySize.Sm" Alert="true" CloseOnOverlayClick="false" CloseOnEscape="true">
+    <ChildContent>
+        <div class="flex items-start gap-3">
+            <span class="confirm-icon">@((MarkupString)WarnIcon)</span>
+            <div>
+                <p class="text-sm text-text-secondary">@ConfirmMessage</p>
+                @if (!string.IsNullOrWhiteSpace(TargetName))
+                {
+                    <p class="mt-1 text-sm font-semibold text-text-primary">@TargetName</p>
+                }
+            </div>
+        </div>
+    </ChildContent>
+    <Footer>
+        <div class="flex justify-end gap-2 w-full">
+            <XFButton Text="Cancelar" Autofocus="true" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                      OnClick="CancelAsync" />
+            <XFButton Text="@ConfirmText" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Danger"
+                      OnClick="ConfirmAsync" />
+        </div>
+    </Footer>
+</XFDialog>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "Confirmar exclusão";
+
+    [Parameter, EditorRequired] public string ConfirmMessage { get; set; } = string.Empty;
+
+    /// <summary>Nome do item afetado (ex.: entidade), exibido em destaque.</summary>
+    [Parameter] public string? TargetName { get; set; }
+
+    [Parameter] public string ConfirmText { get; set; } = "Excluir";
+
+    [Parameter] public EventCallback OnConfirm { get; set; }
+
+    private const string WarnIcon =
+        """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color: rgb(245 158 11)"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>""";
+
+    private Task CancelAsync() => OpenChanged.InvokeAsync(false);
+
+    private async Task ConfirmAsync()
+    {
+        await OnConfirm.InvokeAsync();
+        await OpenChanged.InvokeAsync(false);
+    }
+
+    private Task OnOpenChanged(bool open) => OpenChanged.InvokeAsync(open);
+}

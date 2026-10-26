@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/XForge.Ide.App/XForge.Ide.App.csproj" />
+    <Project Path="src/XForge.Ide.Application/XForge.Ide.Application.csproj" />
+    <Project Path="src/XForge.Ide.Core/XForge.Ide.Core.csproj" />
+    <Project Path="src/XForge.Ide.Infrastructure/XForge.Ide.Infrastructure.csproj" />
+    <Project Path="src/XForge.Ide.Server/XForge.Ide.Server.csproj" />
+    <Project Path="src/XForge.Ide.Templates/XForge.Ide.Templates.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/XForge.Ide.Core.Tests/XForge.Ide.Core.Tests.csproj" />
+  </Folder>
+</Solution>

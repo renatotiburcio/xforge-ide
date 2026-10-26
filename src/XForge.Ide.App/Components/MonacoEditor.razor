@@ -1,0 +1,293 @@
+@using Microsoft.JSInterop
+@using XForge.Ide.App.Services
+@implements IAsyncDisposable
+
+<div id="@_containerId" class="xf-monaco" @attributes="AdditionalAttributes"></div>
+
+@code {
+    /// <summary>
+    /// Raiz do projeto aberto — quando informada (com caminho de arquivo .cs), o editor
+    /// liga o IntelliSense Roslyn (completions, hover e diagnósticos).
+    /// </summary>
+    [Parameter] public string? ProjectRoot { get; set; }
+
+    /// <summary>Caminho absoluto do arquivo aberto (necessário para o IntelliSense).</summary>
+    [Parameter] public string? FilePath { get; set; }
+
+    /// <summary>Id do container DOM.</summary>
+    [Parameter, EditorRequired] public string Id { get; set; } = Guid.NewGuid().ToString("N")[..12];
+
+    /// <summary>Modo: "editor" (padrão) ou "diff".</summary>
+    [Parameter] public string Mode { get; set; } = "editor";
+
+    /// <summary>Linguagem Monaco: csharp, sql, typescript, javascript, json, markdown, rust, html, css, plaintext.</summary>
+    [Parameter] public string Language { get; set; } = "plaintext";
+
+    /// <summary>Tema da IDE: "light" ou "dark" (vira xforge-light / xforge-dark).</summary>
+    [Parameter] public string Theme { get; set; } = "light";
+
+    [Parameter] public string Value { get; set; } = string.Empty;
+
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter] public bool Minimap { get; set; } = true;
+
+    [Parameter] public bool WordWrap { get; set; }
+
+    [Parameter] public string? OriginalValue { get; set; }
+
+    [Parameter] public string BasePath { get; set; } = "/monaco";
+
+    [Parameter] public EventCallback<string> OnSave { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private string _containerId = string.Empty;
+    private DotNetObjectReference<MonacoEditor>? _selfRef;
+    private bool _created;
+    private string? _appliedTheme;
+    private string? _appliedLanguage;
+
+    protected override void OnInitialized()
+    {
+        _containerId = "xf-monaco-" + Id;
+        if (ThemeState is not null)
+        {
+            ThemeState.Changed += OnThemeChanged;
+        }
+        if (Preferences is not null)
+        {
+            Preferences.Changed += OnPreferencesChanged;
+        }
+    }
+
+    private async void OnPreferencesChanged()
+    {
+        if (_created && Preferences is not null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("xfMonaco.applyPreferences", _containerId, Preferences.Current);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+
+    // O estado da IDE fala "light"/"dark"; o Monaco recebe "xforge-light"/"xforge-dark"
+    private static string KindOf(string theme) =>
+        string.Equals(theme, "dark", StringComparison.OrdinalIgnoreCase) ? "dark" : "light";
+
+    private async void OnThemeChanged()
+    {
+        if (_created && ThemeState is not null)
+        {
+            await ApplyThemeAsync(KindOf(ThemeState.Current));
+        }
+    }
+
+    private async Task ApplyThemeAsync(string kind)
+    {
+        if (_appliedTheme == kind)
+        {
+            return;
+        }
+        _appliedTheme = kind;
+        Theme = kind;
+        try
+        {
+            await JS.InvokeVoidAsync("xfMonaco.defineTheme", kind);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _created)
+        {
+            return;
+        }
+
+        _selfRef = DotNetObjectReference.Create(this);
+        try
+        {
+            var kind = KindOf(Theme);
+            var prefs = Preferences?.Current;
+            var options = new
+            {
+                basePath = BasePath,
+                language = Language,
+                theme = "xforge-" + kind,
+                value = Value,
+                minimap = prefs?.Minimap ?? Minimap,
+                wordWrap = prefs?.WordWrap ?? WordWrap,
+                fontSize = prefs?.FontSize ?? 13,
+                fontFamily = prefs?.FontFamily ?? "'JetBrains Mono', ui-monospace, monospace",
+                tabSize = prefs?.TabSize ?? 4,
+                lineNumbers = prefs?.LineNumbers ?? true,
+                original = OriginalValue ?? string.Empty,
+            };
+
+            if (Mode == "diff")
+            {
+                // DiffEditor: retorna booleano
+                _created = await JS.InvokeAsync<bool>("xfMonaco.createDiff", _containerId, _selfRef, options, kind);
+            }
+            else
+            {
+                // createWithTheme retorna o valor inicial do editor (string), não booleano
+                var initial = await JS.InvokeAsync<string?>("xfMonaco.createWithTheme", _containerId, _selfRef, options, kind);
+                _created = initial is not null;
+            }
+            _appliedTheme = kind;
+            _appliedLanguage = Language;
+
+            // aplica preferências do usuário (podem ter carregado depois do init)
+            if (Preferences is not null)
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("xfMonaco.applyPreferences", _containerId, Preferences.Current);
+                }
+                catch (JSDisconnectedException)
+                {
+                }
+            }
+
+            // IntelliSense Roslyn (apenas para .cs dentro de um projeto)
+            if (!string.IsNullOrWhiteSpace(ProjectRoot))
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("xfIntellisense.attach", _containerId, new
+                    {
+                        projectRoot = ProjectRoot,
+                        filePath = FilePath ?? string.Empty,
+                        hubPath = "/hubs/intellisense",
+                        languages = new[] { "csharp" },
+                    });
+                }
+                catch (JSDisconnectedException)
+                {
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // interop indisponível (pré-render) — tentará na próxima renderização interativa
+            Console.WriteLine($"[MonacoEditor] falha ao criar editor: {ex.Message}");
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_created)
+        {
+            return;
+        }
+
+        await ApplyThemeAsync(KindOf(Theme));
+
+        // troca de aba/arquivo: a linguagem pode mudar sem recriar o editor
+        if (_appliedLanguage != Language)
+        {
+            _appliedLanguage = Language;
+            await JS.InvokeVoidAsync("xfMonaco.setLanguage", _containerId, Language);
+        }
+
+        if (Mode != "diff")
+        {
+            try
+            {
+                var current = await JS.InvokeAsync<string?>("xfMonaco.getValue", _containerId);
+                if (current is not null && current != Value)
+                {
+                    await JS.InvokeVoidAsync("xfMonaco.setValue", _containerId, Value);
+                }
+            }
+            catch (JSException)
+            {
+                // editor ainda não disponível no DOM
+            }
+        }
+    }
+
+    /// <summary>Aplica a linguagem imediatamente (troca de aba com tipo diferente).</summary>
+    public async Task SetLanguageAsync(string language)
+    {
+        Language = language;
+        if (_created && _appliedLanguage != language)
+        {
+            _appliedLanguage = language;
+            await JS.InvokeVoidAsync("xfMonaco.setLanguage", _containerId, language);
+        }
+    }
+
+    public async Task SetValueAsync(string value)
+    {
+        Value = value;
+        if (_created)
+        {
+            await JS.InvokeVoidAsync("xfMonaco.setValue", _containerId, value);
+        }
+    }
+
+    public async Task<string?> GetValueAsync()
+        => _created ? await JS.InvokeAsync<string?>("xfMonaco.getValue", _containerId) : Value;
+
+    /// <summary>Texto selecionado no editor (null quando não há seleção).</summary>
+    public async Task<string?> GetSelectedTextAsync()
+        => _created ? await JS.InvokeAsync<string?>("xfMonaco.getSelectedText", _containerId) : null;
+
+    /// <summary>Posiciona o cursor em uma linha (1-based) e rola até ela.</summary>
+    public async Task RevealLineAsync(int line)
+        => await JS.InvokeVoidAsync("xfMonaco.revealLine", _containerId, line);
+
+    public async Task SetThemeAsync(string theme)
+    {
+        await ApplyThemeAsync(KindOf(theme));
+    }
+
+    [JSInvokable]
+    public Task OnContentChanged(string value)
+        => ValueChanged.InvokeAsync(value);
+
+    [JSInvokable]
+    public Task OnSaveRequested(string value)
+        => OnSave.HasDelegate ? OnSave.InvokeAsync(value) : Task.CompletedTask;
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    /// <summary>Estado de tema da IDE (opcional) — sincroniza o Monaco com light/dark.</summary>
+    [Inject] private ThemeState? ThemeState { get; set; }
+
+    /// <summary>Preferências do editor (opcional) — fonte, tab, wrap, minimapa.</summary>
+    [Inject] private IdeEditorPreferences? Preferences { get; set; }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (ThemeState is not null)
+        {
+            ThemeState.Changed -= OnThemeChanged;
+        }
+        if (Preferences is not null)
+        {
+            Preferences.Changed -= OnPreferencesChanged;
+        }
+        try
+        {
+            if (_created)
+            {
+                await JS.InvokeVoidAsync("xfMonaco.dispose", _containerId);
+            }
+        }
+        catch
+        {
+            // circuito encerrado
+        }
+        _selfRef?.Dispose();
+    }
+}

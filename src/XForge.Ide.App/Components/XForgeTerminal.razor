@@ -1,0 +1,66 @@
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+
+<div id="@_containerId" class="ide-terminal" @attributes="AdditionalAttributes"></div>
+
+@code {
+    private string _containerId = "xf-term-" + Guid.NewGuid().ToString("N")[..12];
+
+    /// <summary>Id estável da sessão (uma aba de terminal do cliente).</summary>
+    [Parameter, EditorRequired] public string TerminalId { get; set; } = string.Empty;
+
+    /// <summary>Diretório de trabalho inicial (raiz do projeto aberto).</summary>
+    [Parameter] public string WorkingDirectory { get; set; } = ".";
+
+    /// <summary>Rota do hub SignalR (padrão: /hubs/terminal).</summary>
+    [Parameter] public string HubPath { get; set; } = "/hubs/terminal";
+
+    [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    private bool _ready;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _ready)
+        {
+            return;
+        }
+        _ready = true;
+        try
+        {
+            await JS.InvokeVoidAsync("xfTerminal.create", _containerId, TerminalId, HubPath, WorkingDirectory);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch
+        {
+            // interop indisponível (pré-render/SSR) — tentará novamente no próximo render interativo
+        }
+    }
+
+    /// <summary>Foca o terminal e reajusta ao tamanho real do painel.</summary>
+    public async Task FocusAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("xfTerminal.focus", TerminalId);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("xfTerminal.dispose", TerminalId);
+        }
+        catch
+        {
+        }
+    }
+}

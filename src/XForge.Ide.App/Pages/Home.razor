@@ -1,0 +1,119 @@
+@page "/home"
+@rendermode InteractiveServer
+@using XForge.Ide.Application.Services
+@using XForge.Ide.Application.Dto
+@inject ProjectService Projects
+@inject IdeUiState Ui
+
+<PageTitle>XForge IDE — Início</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="6" FullWidth="true">
+    <XFStack Orientation="XFOrientation.Horizontal" Gap="4" Wrap="XFWrap.Wrap" AlignItems="XFAlignItems.Center">
+        <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Bem-vindo à XForge IDE</XFTypography>
+        <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Primary" Text="Marco M1" />
+    </XFStack>
+
+    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+        RAD de última geração: dicionário de dados, wizards, designer de telas, IA e Git — em ASP.NET Core + Blazor.
+    </XFTypography>
+
+    <div class="grid gap-4 lg:grid-cols-3">
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Projeto atual</XFTypography>
+                @if (Ui.CurrentProject is { } p)
+                {
+                    <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">@p.Name</XFTypography>
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">@p.Path</XFTypography>
+                }
+                else
+                {
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                        Nenhum projeto aberto. Crie ou abra um projeto para começar.
+                    </XFTypography>
+                }
+            </ChildContent>
+        </XFCard>
+
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Projetos</XFTypography>
+                <XFTypography Variant="XFTypographyVariant.Body1">@_projects.Count registrado(s)</XFTypography>
+                <div class="mt-3 flex gap-2">
+                    <XFButton Text="Novo projeto" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary"
+                              OnClick="GoToNewProject" />
+                </div>
+            </ChildContent>
+        </XFCard>
+
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">Roadmap</XFTypography>
+                <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                    M1 Shell concluído · M2 Dados+Wizard · M3 Editor · M4 Designer · M5 RAD · M6 IA · M7 Git/Electron
+                </XFTypography>
+            </ChildContent>
+        </XFCard>
+    </div>
+
+    <XFTypography Variant="XFTypographyVariant.H2" Weight="XFTypographyWeight.Semibold">Projetos recentes</XFTypography>
+    @if (_projects.Count == 0)
+    {
+        <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Xl">
+            <ChildContent>
+                <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary">
+                    Nenhum projeto registrado ainda. Use <b>Novo projeto</b> para registrar sua primeira solution.
+                </XFTypography>
+            </ChildContent>
+        </XFCard>
+    }
+    else
+    {
+        <XFTable Striped="true" Hoverable="true" Compact="true">
+            <XFTableHeader>
+                <XFTableRow>
+                    <XFTableCell Header="true">Nome</XFTableCell>
+                    <XFTableCell Header="true">Caminho</XFTableCell>
+                    <XFTableCell Header="true">Última abertura</XFTableCell>
+                    <XFTableCell Header="true"></XFTableCell>
+                </XFTableRow>
+            </XFTableHeader>
+            <XFTableBody>
+                @foreach (var p in _projects.Take(6))
+                {
+                    <XFTableRow>
+                        <XFTableCell>@p.Name</XFTableCell>
+                        <XFTableCell><span class="text-text-muted text-sm">@p.Path</span></XFTableCell>
+                        <XFTableCell>@(p.LastOpenedAt?.ToLocalTime().ToString("g") ?? "—")</XFTableCell>
+                        <XFTableCell>
+                            <XFButton Text="Abrir" AriaLabel="@($"Abrir {p.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                                      OnClick="() => OpenProjectAsync(p)" />
+                        </XFTableCell>
+                    </XFTableRow>
+                }
+            </XFTableBody>
+        </XFTable>
+    }
+</XFStack>
+
+@code {
+    private IReadOnlyList<ProjectDto> _projects = Array.Empty<ProjectDto>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _projects = await Projects.ListAsync();
+    }
+
+    private void GoToNewProject() => Nav.NavigateTo("/projects");
+
+    private async Task OpenProjectAsync(ProjectDto p)
+    {
+        var result = await Projects.OpenAsync(p.Id);
+        if (result.IsSuccess)
+        {
+            Ui.SetProject(result.Value);
+        }
+    }
+
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+}

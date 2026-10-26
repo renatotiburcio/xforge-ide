@@ -1,0 +1,35 @@
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@using XForge.DesignSystem.Components.Typography
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="4" FullWidth="true" Class="pt-10 items-center text-center">
+    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="@BadgeText" />
+    <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">@Title</XFTypography>
+    <XFTypography Variant="XFTypographyVariant.Body1" Color="XFTypographyColor.Secondary" Class="max-w-xl">
+        @Description
+    </XFTypography>
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg" Class="max-w-xl">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                @MilestoneNote
+            </XFTypography>
+        </ChildContent>
+    </XFCard>
+</XFStack>
+
+@code {
+    /// <summary>Rótulo curto exibido no badge (ex.: "M4 · Designer de Telas").</summary>
+    [Parameter, EditorRequired] public string BadgeText { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired] public string Description { get; set; } = string.Empty;
+
+    /// <summary>Nota sobre o marco do roadmap em que o módulo será entregue.</summary>
+    [Parameter] public string? Milestone { get; set; }
+
+    private string MilestoneNote => Milestone is null
+        ? "Este módulo faz parte do roadmap da XForge IDE."
+        : $"Entrega prevista no marco {Milestone} do roadmap (docs/ANALISE.md §7).";
+}

@@ -1,0 +1,76 @@
+@page "/settings/theme"
+@rendermode InteractiveServer
+@using XForge.DesignSystem.Components.DataDisplay.Card
+@using XForge.DesignSystem.Components.DataDisplay.Badge
+@using XForge.DesignSystem.Components.Typography
+@using XForge.DesignSystem.Components.Button
+@using XForge.DesignSystem.Components.Layout
+@using XForge.DesignSystem.Core.Primitives
+@inject ThemeState Theme
+
+@code {
+    private Task UseLightAsync() => Theme.SetAsync("light");
+    private Task UseDarkAsync() => Theme.SetAsync("dark");
+}
+
+<PageTitle>XForge IDE — Tema</PageTitle>
+
+<XFStack Orientation="XFOrientation.Vertical" Gap="5" FullWidth="true">
+    <XFTypography Variant="XFTypographyVariant.H1" Weight="XFTypographyWeight.Bold">Tema</XFTypography>
+
+    <div class="grid gap-4 md:grid-cols-2">
+        @* Card tema claro *@
+        <XFCard Variant="@(Theme.Current == "light" ? XFCardVariant.Elevated : XFCardVariant.Outlined)" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                    <span class="theme-preview theme-preview--light" aria-hidden="true"></span>
+                    <div class="flex flex-col flex-1">
+                        <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">Claro</XFTypography>
+                        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">Máximo contraste para ambientes iluminados</XFTypography>
+                    </div>
+                    @if (Theme.Current == "light")
+                    {
+                        <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Success" Text="Ativo" />
+                    }
+                    else
+                    {
+                        <XFButton Text="Usar claro" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
+                                  OnClick="UseLightAsync" />
+                    }
+                </XFStack>
+            </ChildContent>
+        </XFCard>
+
+        @* Card tema escuro *@
+        <XFCard Variant="@(Theme.Current == "dark" ? XFCardVariant.Elevated : XFCardVariant.Outlined)" Padding="XFPadding.Lg">
+            <ChildContent>
+                <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                    <span class="theme-preview theme-preview--dark" aria-hidden="true"></span>
+                    <div class="flex flex-col flex-1">
+                        <XFTypography Variant="XFTypographyVariant.Body1" Weight="XFTypographyWeight.Semibold">Escuro</XFTypography>
+                        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">Confortável para sessões longas de desenvolvimento</XFTypography>
+                    </div>
+                    @if (Theme.Current == "dark")
+                    {
+                        <XFBadge Variant="XFBadgeVariant.Solid" Color="XFBadgeColor.Success" Text="Ativo" />
+                    }
+                    else
+                    {
+                        <XFButton Text="Usar escuro" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
+                                  OnClick="UseDarkAsync" />
+                    }
+                </XFStack>
+            </ChildContent>
+        </XFCard>
+    </div>
+
+    <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+        <ChildContent>
+            <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary">
+                A preferência é persistida em <b>localStorage</b> (chave <code>xf-theme</code>) e aplicada antes do
+                carregamento do CSS, sem flash. Os tokens seguem o design system: tema claro usa
+                <code>primary-500</code>, tema escuro usa <code>primary-400</code>.
+            </XFTypography>
+        </ChildContent>
+    </XFCard>
+</XFStack>
