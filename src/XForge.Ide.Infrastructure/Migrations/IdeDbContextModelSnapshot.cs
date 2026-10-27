@@ -193,6 +193,24 @@ namespace XForge.Ide.Infrastructure.Migrations
                     b.ToTable("DesignSessions");
                 });
 
+            modelBuilder.Entity("XForge.Ide.Core.Entities.EditorDraft", b =>
+                {
+                    b.Property<string>("Path")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Path");
+
+                    b.ToTable("EditorDrafts");
+                });
+
             modelBuilder.Entity("XForge.Ide.Core.Entities.Entity", b =>
                 {
                     b.Property<Guid>("Id")

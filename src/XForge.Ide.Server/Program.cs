@@ -46,6 +46,9 @@ builder.Services.AddScoped<XForge.Ide.App.Services.IdeEditorPreferences>();
 // snapshots de interface ("onde eu estava") — sobrevivem ao F5
 builder.Services.AddScoped<XForge.Ide.App.Services.UiStatePersistor>();
 
+// rascunhos do editor (edições não salvas sobrevivem ao F5)
+builder.Services.AddScoped<XForge.Ide.App.Services.EditorDraftPersistor>();
+
 // build/run dos projetos gerados com saída em tempo real
 builder.Services.AddSingleton<BuildRunService>();
 

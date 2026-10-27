@@ -17,6 +17,7 @@
 @inject NavigationManager Nav
 @inject XForge.Ide.Application.Services.ProjectService Projects
 @inject UiStatePersistor Snapshots
+@inject EditorDraftPersistor Drafts
 @implements IAsyncDisposable
 
 <PageTitle>XForge IDE — Editor de Código</PageTitle>
@@ -951,6 +952,16 @@
         else
         {
             var content = await Files.ReadAsync(path) ?? string.Empty;
+
+            // rascunho não salvo entra no lugar do disco (aba volta marcada como suja)
+            var veioDoRascunho = false;
+            var rascunho = await Drafts.GetAsync(path);
+            if (rascunho is not null && !string.Equals(rascunho.Content, content, StringComparison.Ordinal))
+            {
+                content = rascunho.Content;
+                veioDoRascunho = true;
+            }
+
             _pendingContents[path] = content;
 
             var tab = new TabBar.EditorTab
@@ -961,6 +972,7 @@
                 Language = LanguageFor(path),
                 IsActive = true,
                 Icon = FileIcon(Path.GetFileName(path)),
+                Dirty = veioDoRascunho,
             };
 
             foreach (var t in _tabs)
@@ -972,9 +984,9 @@
             _activeContent = content;
             _suppressChange = true;
             Ui.SetActiveFile(tab.Path, null);
-            EditorState.SetPending(tab.Path, null);
+            EditorState.SetPending(tab.Path, veioDoRascunho ? content : null);
             SyncEditorState();
-            Output.Write("Editor", $"Aberto: {tab.Title}");
+            Output.Write("Editor", (veioDoRascunho ? "Restaurado do rascunho: " : "Aberto: ") + tab.Title);
             StateHasChanged();
         }
 
@@ -1028,6 +1040,8 @@
         if (_activeTab is not null)
         {
             EditorState.SetPending(_activeTab.Path, value);
+            // rascunho: edições não salvas sobrevivem ao F5 (debounce 500ms)
+            Drafts.Save(_activeTab.Path, value);
         }
         return Task.CompletedTask;
     }
@@ -1044,6 +1058,8 @@
         Ui.SetStatus($"Salvo: {_activeTab.Title}");
         Output.Write("Editor", $"Salvo: {_activeTab.Path}");
         EditorState.SetPending(_activeTab.Path, null);
+        // disco virou a verdade: o rascunho não é mais necessário
+        await Drafts.DeleteAsync(_activeTab.Path);
         SyncEditorState();
         try
         {
@@ -1243,7 +1259,8 @@
         Ui.Changed -= OnUiStateChanged;
         Output.Changed -= OnOutputChanged;
         _self?.Dispose();
-        // garante a gravação dos snapshots pendentes ao sair da rota
+        // garante a gravação dos snapshots e rascunhos pendentes ao sair da rota
         await Snapshots.FlushAsync();
+        await Drafts.FlushAsync();
     }
 }

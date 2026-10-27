@@ -27,6 +27,7 @@ public class IdeDbContext : DbContext
     public DbSet<GitSetting> GitSettings => Set<GitSetting>();
     public DbSet<McpToolLog> McpToolLogs => Set<McpToolLog>();
     public DbSet<UiSnapshot> UiSnapshots => Set<UiSnapshot>();
+    public DbSet<EditorDraft> EditorDrafts => Set<EditorDraft>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -151,6 +152,13 @@ public class IdeDbContext : DbContext
             e.Property(x => x.Key).IsRequired().HasMaxLength(300);
             e.Property(x => x.Route).HasMaxLength(200);
             e.Property(x => x.Json).HasMaxLength(16000);
+        });
+
+        b.Entity<EditorDraft>(e =>
+        {
+            e.HasKey(x => x.Path);
+            e.Property(x => x.Path).IsRequired().HasMaxLength(1000);
+            // Content sem limite: arquivos de código podem ser grandes
         });
     }
 }
