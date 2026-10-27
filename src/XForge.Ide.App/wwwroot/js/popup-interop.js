@@ -6,7 +6,26 @@
 window.xfPopup = (function () {
   // [role=tree] NÃO entra: o XFMenu vertical usa role=tree para o menu da
   // sidebar (by design do design system) — não é popup. Dropdowns usam menubar.
-  const POPUP_SELECTOR = '[role=listbox], [role=menu], .xf-dropdown, .xf-calendar, .xf-menu-panel';
+  //
+  // ATENÇÃO: [role=listbox] NU (descoberto em 26/10/2026) é populado por listas
+  // do próprio app (Quick View do dicionário, paleta Quick Open) que NÃO são
+  // popups — recebiam position:fixed e eram reposicionadas como dropdown,
+  // quebrando o layout. O seletor agora é restrito às raízes dos componentes
+  // de formulário do design system (.xf-transfer-list tem listas ESTÁTICAS e
+  // portanto fica fora de propósito).
+  const DS_FORM_ROOTS = '.xf-select, .xf-combobox, .xf-autocomplete, .xf-multiselect, .xf-dropdown-datagrid';
+  const POPUP_SELECTOR = [
+    '.xf-select [role=listbox]',
+    '.xf-combobox [role=listbox]',
+    '.xf-autocomplete [role=listbox]',
+    '.xf-multiselect [role=listbox]',
+    '.xf-dropdown-datagrid [role=listbox]',
+    '.xf-select-dropdown',
+    '[role=menu]',
+    '.xf-dropdown',
+    '.xf-calendar',
+    '.xf-menu-panel'
+  ].join(', ');
   const TRIGGER_SELECTOR = '[aria-haspopup], [aria-controls], .xf-select__control, .xf-combobox__control, .xf-input';
   const observed = new WeakSet();
   let repositioning = false;
@@ -24,7 +43,7 @@ window.xfPopup = (function () {
       var hasPopup = document.querySelector('[aria-haspopup="listbox"][aria-controls]');
       if (hasPopup && hasPopup.getAttribute('aria-controls') === id) return hasPopup;
     }
-    var root = popup.closest('.xf-select, .xf-combobox, .xf-datepicker, .xf-autocomplete');
+    var root = popup.closest(DS_FORM_ROOTS + ', .xf-datepicker');
     if (root) {
       var ctrl = root.querySelector(TRIGGER_SELECTOR) || root.querySelector('input, button');
       if (ctrl) return ctrl;
@@ -100,8 +119,14 @@ window.xfPopup = (function () {
     st.id = 'xf-popup-style';
     st.textContent = [
       // modais/diálogos: remover containing blocks e clipping dos popups
-      '[role="dialog"] [role="listbox"], [role="dialog"] [role="menu"] { position: fixed !important; }',
-      '.xf-select__dropdown, .xf-combobox__listbox, [role="listbox"] { position: fixed; }'
+      // (restrito aos componentes de formulário do DS — listas do app ficam de fora)
+      '[role="dialog"] .xf-select [role="listbox"], [role="dialog"] .xf-combobox [role="listbox"],' +
+        ' [role="dialog"] .xf-autocomplete [role="listbox"], [role="dialog"] .xf-multiselect [role="listbox"],' +
+        ' [role="dialog"] .xf-dropdown-datagrid [role="listbox"], [role="dialog"] [role="menu"]' +
+        ' { position: fixed !important; }',
+      '.xf-select [role="listbox"], .xf-combobox [role="listbox"], .xf-autocomplete [role="listbox"],' +
+        ' .xf-multiselect [role="listbox"], .xf-dropdown-datagrid [role="listbox"],' +
+        ' .xf-select-dropdown { position: fixed; }'
     ].join('\n');
     document.head.appendChild(st);
 

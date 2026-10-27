@@ -131,6 +131,7 @@ public record ErEdgeDto(
 // ------------------------------------------------------------------ Requests
 
 public record CreateDictionaryRequest(Guid ProjectId, string Name);
+public record UpdateDictionaryRequest(Guid DictionaryId, string Name);
 public record CreateEntityRequest(
     Guid DictionaryId, string Name, string TableName, string Provider, string? Prefix, string? ExternalName);
 public record UpdateEntityRequest(

@@ -38,70 +38,84 @@ public class IdeModules
         _          => "XForge IDE",
     };
 
-    /// <summary>Itens do menu lateral por módulo (rótulo, rota, marco futuro).</summary>
-    public static IReadOnlyList<(string Label, string Href, string? Milestone)> SidebarItems(string brand) => brand switch
+    /// <summary>
+    /// Item do menu lateral. <see cref="Children"/> permite a hierarquia
+    /// (ex.: os dicionários do projeto abaixo de "Dicionário").
+    /// </summary>
+    public sealed record SidebarNode(string Label, string Href, string? Milestone = null)
     {
-        "home" => new List<(string, string, string?)>
+        public IReadOnlyList<SidebarNode> Children { get; init; } = Array.Empty<SidebarNode>();
+    }
+
+    /// <summary>
+    /// Itens do menu lateral por módulo (rótulo, rota, marco futuro).
+    /// No módulo "data", o nó "Dicionário" recebe os dicionários do projeto
+    /// como filhos — navegação direta, sem tela/sessão separada por dicionário.
+    /// </summary>
+    public static IReadOnlyList<SidebarNode> SidebarItems(
+        string brand, IReadOnlyList<SidebarNode>? dictionaryChildren = null) => brand switch
+    {
+        "home" => new List<SidebarNode>
         {
-            ("Visão geral", "/home", null),
-            ("Projetos", "/projects", null),
-            ("Modelos de projeto", "/models", "M2"),
+            new("Visão geral", "/home"),
+            new("Projetos", "/projects"),
+            new("Modelos de projeto", "/models", "M2"),
         },
-        "data" => new List<(string, string, string?)>
+        "data" => new List<SidebarNode>
         {
-            ("Dicionário", "/data", null),
-            ("Diagrama ER", "/data/er", "M2b"),
-            ("Importar banco", "/data/import", null),
-            ("Migrations", "/data/migrations", "M2b"),
+            new SidebarNode("Dicionário", "/data") with { Children = dictionaryChildren ?? Array.Empty<SidebarNode>() },
+            new("Diagrama ER", "/data/er", "M2b"),
+            new("Importar banco", "/data/import"),
+            new("Migrations", "/data/migrations", "M2b"),
         },
-        "code" => new List<(string, string, string?)>
+        "code" => new List<SidebarNode>
         {
-            ("Explorer", "/code", "M3"),
-            ("Busca global", "/code/search", "M3"),
-            ("Diff", "/code/diff", "M3"),
+            new("Explorer", "/code", "M3"),
+            new("Busca global", "/code/search", "M3"),
+            new("Diff", "/code/diff", "M3"),
         },
-        "design" => new List<(string, string, string?)>
+        "design" => new List<SidebarNode>
         {
-            ("Canvas", "/design", "M4"),
-            ("Toolbox XF*", "/design/toolbox", "M4"),
-            ("Propriedades", "/design/properties", "M4"),
+            new("Canvas", "/design", "M4"),
+            new("Toolbox XF*", "/design/toolbox", "M4"),
+            new("Propriedades", "/design/properties", "M4"),
         },
-        "wizards" => new List<(string, string, string?)>
+        "wizards" => new List<SidebarNode>
         {
-            ("Novo aplicativo", "/wizards", null),
-            ("CRUD", "/wizards/crud", "M5"),
-            ("Master-Detail", "/wizards/master-detail", "M5"),
-            ("Grid + Form", "/wizards/grid-form", "M5"),
-            ("Inline Edit", "/wizards/inline-edit", "M5"),
-            ("Pivot", "/wizards/pivot", "M5"),
-            ("Layouts", "/wizards/layouts", "M5"),
+            new("Novo aplicativo", "/wizards"),
+            new("CRUD", "/wizards/crud", "M5"),
+            new("Master-Detail", "/wizards/master-detail", "M5"),
+            new("Grid + Form", "/wizards/grid-form", "M5"),
+            new("Inline Edit", "/wizards/inline-edit", "M5"),
+            new("Pivot", "/wizards/pivot", "M5"),
+            new("Layouts", "/wizards/layouts", "M5"),
         },
-        "ai" => new List<(string, string, string?)>
+        "ai" => new List<SidebarNode>
         {
-            ("Chat", "/ai", "M6"),
-            ("Agentes", "/ai/agents", "M6"),
-            ("Skills & Comandos", "/ai/skills", "M6"),
-            ("Histórico", "/ai/history", "M6"),
+            new("Chat", "/ai", "M6"),
+            new("Agentes", "/ai/agents", "M6"),
+            new("Skills & Comandos", "/ai/skills", "M6"),
+            new("Histórico", "/ai/history", "M6"),
         },
-        "git" => new List<(string, string, string?)>
+        "git" => new List<SidebarNode>
         {
-            ("Alterações", "/git", "M7"),
-            ("Histórico", "/git/log", "M7"),
-            ("Branches", "/git/branches", "M7"),
-            ("Pull Requests", "/git/prs", "M7"),
+            new("Alterações", "/git", "M7"),
+            new("Histórico", "/git/log", "M7"),
+            new("Branches", "/git/branches", "M7"),
+            new("Pull Requests", "/git/prs", "M7"),
         },
-        "run" => new List<(string, string, string?)>
+        "run" => new List<SidebarNode>
         {
-            ("Build & Run", "/run", "M3"),
-            ("Console", "/run/console", "M3"),
+            new("Build & Run", "/run", "M3"),
+            new("Console", "/run/console", "M3"),
         },
-        "settings" => new List<(string, string, string?)>
+        "settings" => new List<SidebarNode>
         {
-            ("Geral", "/settings", null),
-            ("Tema", "/settings/theme", null),
-            ("Provedores de IA", "/settings/ai", "M6"),
-            ("GitHub", "/settings/github", "M7"),
+            new("Geral", "/settings"),
+            new("Tema", "/settings/theme"),
+            new("Provedores de IA", "/settings/ai", "M6"),
+            new("GitHub", "/settings/github", "M7"),
         },
-        _ => new List<(string, string, string?)> { ("Visão geral", "/home", null) },
+        _ => new List<SidebarNode> { new("Visão geral", "/home") },
     };
 }

@@ -111,7 +111,7 @@ const interactions = [
     route: '/data',
     name: 'Exclusão de dicionário exibe confirmação',
     steps: [
-      { waitText: 'Novo dicionário' },
+      { waitText: 'Adicionar dicionário' },
       { clickFirst: 'button[aria-label^="Excluir dicionário "]' },
       { waitText: 'Excluir dicionário' },
       { expectFocusText: 'Cancelar' },
@@ -643,7 +643,7 @@ async function ensureDictionaryFixture(interaction, problems) {
   console.error('[qa] ensureDictionary hasDictionary=' + hasDictionary);
 
   if (!hasDictionary) {
-    const opened = await clickText('Novo dicionário');
+    const opened = await clickText('Adicionar dicionário');
     if (!opened) {
       problems.push(`${interaction.name}: não foi possível abrir o modal de novo dicionário. Página: ${await debugPageText()}`);
       return;

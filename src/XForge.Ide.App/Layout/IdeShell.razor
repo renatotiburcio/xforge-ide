@@ -1,10 +1,12 @@
 @inherits LayoutComponentBase
 @using XForge.DesignSystem.Components.Layout.Shell
+@using XForge.Ide.Application.Dto
 @inject IdeModules Modules
 @inject ThemeState Theme
 @inject IdeUiState Ui
 @inject NavigationManager Nav
 @inject XForge.Ide.Application.Services.ProjectService Projects
+@inject XForge.Ide.Application.Services.DictionaryService Dictionaries
 @inject IdeEditorPreferences EditorPreferences
 
 @* Acessibilidade: atalho para ir direto ao conteúdo (primeiro elemento focável) *@
@@ -20,9 +22,13 @@
                 <span>@SidebarTitle</span>
             </Header>
             <ChildContent>
+                @* No módulo Dados, "Dicionário" tem os dicionários do projeto como
+                   filhos (hierarquia) — clique abre o dicionário no workspace. *@
                 <XFMenu Items="@SidebarMenuItems"
                         Variant="XFMenuVariant.Sidebar"
                         Size="XFSize.Md"
+                        ExpandedIds="@_expandedMenuIds"
+                        ExpandedIdsChanged="OnMenuExpandedChanged"
                         AriaLabel="@SidebarTitle"
                         SelectedId="@SelectedMenuId" />
             </ChildContent>
@@ -90,32 +96,103 @@
 
     private string? SelectedMenuId => SidebarMenuItems.FirstOrDefault(i => i.Selected)?.Id;
 
+    // Dicionários do projeto (filhos de "Dicionário" na sidebar do módulo Dados)
+    private IReadOnlyList<DictionaryDto> _dictionaries = Array.Empty<DictionaryDto>();
+    private IReadOnlyList<string> _expandedMenuIds = Array.Empty<string>();
+
+    private Task OnMenuExpandedChanged(IReadOnlyList<string> ids)
+    {
+        _expandedMenuIds = ids;
+        return Task.CompletedTask;
+    }
+
     private IReadOnlyList<XFMenuItem> SidebarMenuItems
     {
         get
         {
             var path = new Uri(Nav.Uri).AbsolutePath.TrimEnd('/');
-            return IdeModules.SidebarItems(_brand)
-                .Select(x => new XFMenuItem
-                {
-                    Id = x.Href,
-                    Text = x.Label,
-                    Href = x.Href,
-                    Badge = x.Milestone,
-                    BadgeTone = XFSemanticColor.Info,
-                    Match = NavLinkMatch.Prefix,
-                    Selected = string.Equals(x.Href.TrimEnd('/'), path, StringComparison.OrdinalIgnoreCase),
-                })
+            var uri = Nav.Uri;
+            IReadOnlyList<IdeModules.SidebarNode>? dictionaryChildren = _brand == "data"
+                ? _dictionaries.Select(d => new IdeModules.SidebarNode(d.Name, $"/data?dict={d.Id}")).ToList()
+                : null;
+            return IdeModules.SidebarItems(_brand, dictionaryChildren)
+                .Select(x => ToMenuItem(x, path, uri))
                 .ToList();
         }
+    }
+
+    private static XFMenuItem ToMenuItem(IdeModules.SidebarNode node, string path, string uri)
+    {
+        var hasChildren = node.Children.Count > 0;
+
+        // Links com query (?dict=) comparam a URI completa; os demais, a rota.
+        // O pai "Dicionário" só fica selecionado quando nenhum dicionário está aberto.
+        var selected = node.Href.Contains('?')
+            ? uri.Contains(node.Href, StringComparison.OrdinalIgnoreCase)
+            : string.Equals(node.Href.TrimEnd('/'), path, StringComparison.OrdinalIgnoreCase)
+              && (!hasChildren || !uri.Contains("dict=", StringComparison.OrdinalIgnoreCase));
+
+        return new XFMenuItem
+        {
+            Id = node.Href,
+            Text = node.Label,
+            Href = node.Href,
+            Badge = node.Milestone,
+            BadgeTone = XFSemanticColor.Info,
+            Match = NavLinkMatch.Prefix,
+            Selected = selected,
+            Children = node.Children.Select(c => ToMenuItem(c, path, uri)).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Carrega os dicionários do projeto corrente para a sidebar (módulo Dados).
+    /// Recarrega sempre que o contexto muda (criação/rename refletem na hora).
+    /// </summary>
+    private async Task LoadDictionariesAsync()
+    {
+        if (Ui.CurrentProject is not { } project)
+        {
+            _dictionaries = Array.Empty<DictionaryDto>();
+            return;
+        }
+
+        _dictionaries = await Dictionaries.ListByProjectAsync(project.Id);
     }
 
     protected override void OnInitialized()
     {
         UpdateBrand();
-        Nav.LocationChanged += (_, _) => { UpdateBrand(); InvokeAsync(StateHasChanged); };
+        Nav.LocationChanged += OnLocationChanged;
         Theme.Changed += () => InvokeAsync(StateHasChanged);
-        Ui.Changed += () => InvokeAsync(StateHasChanged);
+        Ui.Changed += OnUiStateChanged;
+    }
+
+    private async void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        try
+        {
+            UpdateBrand();
+            await LoadDictionariesAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception)
+        {
+            // falha de dados não deve derrubar o circuito do shell
+        }
+    }
+
+    private async void OnUiStateChanged()
+    {
+        try
+        {
+            await LoadDictionariesAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception)
+        {
+            // idem
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -138,6 +215,10 @@
         {
             Ui.SetStatus("Pronto");
         }
+
+        // Sidebar do módulo Dados lista os dicionários do projeto restaurado
+        await LoadDictionariesAsync();
+        StateHasChanged();
     }
 
     private void UpdateBrand()
@@ -147,5 +228,14 @@
             i.RoutePrefixes?.Any(p =>
                 path == p || path.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase)) == true);
         _brand = item?.Brand ?? "home";
+
+        if (_brand == "data")
+        {
+            // "Dicionário" nasce expandido (dicionários sempre visíveis na sidebar)
+            if (!_expandedMenuIds.Contains("/data"))
+            {
+                _expandedMenuIds = ["/data"];
+            }
+        }
     }
 }

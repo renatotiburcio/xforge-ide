@@ -64,6 +64,27 @@ public class DictionaryService
         return Result.Success();
     }
 
+    /// <summary>Renomeia o dicionário (≈ renomear o .DCT no Clarion).</summary>
+    public async Task<Result<Dto.DictionaryDto>> RenameAsync(
+        Dto.UpdateDictionaryRequest request, CancellationToken ct = default)
+    {
+        var dictionary = await _dictionaries.GetAsync(request.DictionaryId, ct);
+        if (dictionary is null)
+            return Result<Dto.DictionaryDto>.Failure("Dicionário não encontrado.");
+
+        var name = request.Name?.Trim() ?? string.Empty;
+        if (name.Length == 0)
+            return Result<Dto.DictionaryDto>.Failure("Nome do dicionário é obrigatório.");
+
+        var projectDictionaries = await _dictionaries.ListByProjectAsync(dictionary.ProjectId, ct);
+        if (projectDictionaries.Any(d => d.Id != dictionary.Id && d.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return Result<Dto.DictionaryDto>.Failure($"Já existe um dicionário '{name}' neste projeto.");
+
+        dictionary.Name = name;
+        await _dictionaries.UpdateAsync(dictionary, ct);
+        return Result<Dto.DictionaryDto>.Success(Dto.DictionaryDto.From(dictionary));
+    }
+
     // --------------------------------------------------------------- Entidades
 
     public async Task<Result<Dto.EntityDto>> AddEntityAsync(Dto.CreateEntityRequest request, CancellationToken ct = default)

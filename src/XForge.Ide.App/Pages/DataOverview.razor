@@ -7,6 +7,7 @@
 @inject DictionaryService Dictionaries
 @inject IdeUiState Ui
 @inject XForge.Ide.Application.Services.ProjectService Projects
+@inject NavigationManager Nav
 
 <PageTitle>XForge IDE — Data Designer</PageTitle>
 
@@ -32,8 +33,13 @@
                     <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
                         Dicionários de @Ui.CurrentProject.Name
                     </XFTypography>
-                    <XFButton Text="Novo dicionário" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
+                    @* atalhos: criar e editar dicionário (modais) *@
+                    <XFButton Text="Adicionar dicionário" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
                               OnClick="OpenDictModalAsync" />
+                    <XFButton Text="Editar dicionário" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary"
+                              Disabled="@(_currentDictionary is null)"
+                              AriaLabel="Editar dicionário aberto"
+                              OnClick="OpenDictEditModalAsync" />
                 </XFStack>
 
                 @if (_message is not null)
@@ -198,6 +204,14 @@
        ConfirmText="Criar dicionário" ConfirmAction="CreateDictAsync">
     <XFTextInput Label="Nome *" Placeholder="Principal"
                  Value="@_dictName" ValueChanged="(string v) => _dictName = v ?? string.Empty" />
+</Modal>
+
+@* ====================================================== Modal: editar dicionário *@
+<Modal Open="@_showDictEditModal" OpenChanged="OnDictEditModalChanged"
+       Title="Editar dicionário" Description="Renomeia o dicionário aberto (≈ renomear o .DCT no Clarion)."
+       ConfirmText="Salvar" ConfirmAction="RenameDictAsync">
+    <XFTextInput Label="Nome *" Placeholder="Principal"
+                 Value="@_editDictName" ValueChanged="(string v) => _editDictName = v ?? string.Empty" />
 </Modal>
 
 @* ============================================================= Modal: nova entidade *@
@@ -365,6 +379,10 @@
     private bool _showDictModal;
     private string _dictName = string.Empty;
 
+    // Modal editar dicionário (rename)
+    private bool _showDictEditModal;
+    private string _editDictName = string.Empty;
+
     // Modal entidade
     private bool _showEntityModal;
     private string _entityName = string.Empty;
@@ -436,6 +454,52 @@
             return Task.CompletedTask;
         }
 
+    private Task OpenDictEditModalAsync()
+    {
+        if (_currentDictionary is null)
+        {
+            return Task.CompletedTask;
+        }
+        _editDictName = _currentDictionary.Name;
+        _showDictEditModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnDictEditModalChanged(bool open)
+    {
+        _showDictEditModal = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task RenameDictAsync()
+    {
+        if (_currentDictionary is null)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_editDictName))
+        {
+            _message = "Informe o nome do dicionário.";
+            StateHasChanged();
+            return;
+        }
+
+        var result = await Dictionaries.RenameAsync(new(_currentDictionary.Id, _editDictName.Trim()));
+        if (result.IsSuccess)
+        {
+            _showDictEditModal = false;
+            _message = $"Dicionário renomeado para '{result.Value.Name}'.";
+            await ReloadDictionariesAsync();
+            // o shell escuta Ui.Changed e recarrega a sidebar (novo rótulo)
+            Ui.SetStatus($"Dicionário: {result.Value.Name}");
+        }
+        else
+        {
+            _message = result.Error;
+        }
+        StateHasChanged();
+    }
+
     private async Task CreateDictAsync()
     {
         if (Ui.CurrentProject is null) return;
@@ -458,6 +522,7 @@
         {
             _message = result.Error;
         }
+        StateHasChanged();
     }
 
     private async Task OpenDictionaryAsync(DictionaryDto d)
@@ -467,6 +532,46 @@
         _entities = await Dictionaries.ListEntitiesAsync(d.Id);
         await LoadRelationsAsync();
         await ReloadDictionariesAsync();
+
+        // URL canônica (?dict=<id>): sustenta a seleção na sidebar e sobrevive a F5
+        if (!Nav.Uri.Contains($"dict={d.Id}", StringComparison.OrdinalIgnoreCase))
+        {
+            Nav.NavigateTo($"/data?dict={d.Id}");
+        }
+    }
+
+    /// <summary>Dicionário aberto via query (?dict=&lt;id&gt;) — sustenta a sidebar e o F5.</summary>
+    [SupplyParameterFromQuery(Name = "dict")]
+    public string? DictQuery { get; set; }
+
+    /// <summary>
+    /// Sidebar navega para /data?dict=&lt;id&gt;: abre o dicionário no workspace,
+    /// sem sessão/tela separada por dicionário. O parâmetro supply-from-query
+    /// é o que faz o Router re-renderizar a página na troca só de query.
+    /// </summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Guid.TryParse(DictQuery, out var dictId) && _currentDictionary?.Id != dictId)
+        {
+            var target = _dictionaries.FirstOrDefault(d => d.Id == dictId);
+            if (target is null)
+            {
+                await ReloadDictionariesAsync();
+                target = _dictionaries.FirstOrDefault(d => d.Id == dictId);
+            }
+
+            if (target is not null)
+            {
+                await OpenDictionaryAsync(target);
+            }
+            else
+            {
+                _message = "Dicionário não encontrado.";
+            }
+            StateHasChanged();
+        }
+
+        await base.OnParametersSetAsync();
     }
 
     private Task AskDeleteDictAsync(DictionaryDto d)
@@ -485,6 +590,11 @@
             }
             await ReloadDictionariesAsync();
             _message = $"Dicionário '{d.Name}' excluído.";
+            // remove o ?dict= da URL — nenhum dicionário fica aberto
+            if (System.Web.HttpUtility.ParseQueryString(new Uri(Nav.Uri).Query)["dict"] is not null)
+            {
+                Nav.NavigateTo("/data");
+            }
         };
         _showDeleteConfirm = true;
         return Task.CompletedTask;
