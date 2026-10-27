@@ -28,6 +28,9 @@ const profileDir = path.join(os.tmpdir(), 'xforge-qa-chrome-profile');
 const projectFixtureDir = path.join(os.tmpdir(), 'xforge-qa-gate-project');
 fs.rmSync(projectFixtureDir, { recursive: true, force: true });
 fs.mkdirSync(projectFixtureDir, { recursive: true });
+// subpasta para a interação "F5 preserva pastas expandidas do Explorer"
+fs.mkdirSync(path.join(projectFixtureDir, 'src'), { recursive: true });
+fs.writeFileSync(path.join(projectFixtureDir, 'src', 'Program.cs'), '// fixture do gate\n');
 
 const routes = [
   '/', '/home', '/projects', '/models', '/data', '/data/import', '/data/er',
@@ -120,6 +123,19 @@ const interactions = [
       { expectAlertText: 'Excluir dicionário' },
       { click: 'Cancelar' },
       { expectNoAlert: true }
+    ]
+  },
+  {
+    // F5 devolve o contexto: pasta expandida no Explorer continua expandida
+    // (snapshot de interface, docs/GERENCIAMENTO_ESTADO.md).
+    // O projeto já fica ativo no circuito desde a interação de fixture.
+    route: '/code',
+    name: 'F5 preserva pastas expandidas do Explorer',
+    steps: [
+      { clickFirst: 'button[aria-label="Pasta src"]' },
+      { expectAttribute: { selector: 'button[aria-label="Pasta src"]', name: 'aria-expanded', value: 'true' } },
+      { reload: true },
+      { expectAttribute: { selector: 'button[aria-label="Pasta src"]', name: 'aria-expanded', value: 'true' } }
     ]
   }
 ];
@@ -848,6 +864,43 @@ async function runInteraction(interaction, problems) {
       const hasAlert = await evaluate(`!!document.querySelector('[role=alertdialog]')`);
       if (hasAlert) {
         problems.push(`${interaction.name}: alertdialog continuou aberto após cancelar.`);
+        return;
+      }
+    }
+
+    if (step.sleep) {
+      await sleep(step.sleep);
+    }
+
+    // F5 real: recarrega a página e espera o Blazor subir de novo.
+    if (step.reload) {
+      // o snapshot do Explorer tem debounce de 700 ms: espera a gravação assentar
+      await sleep(1300);
+      await cdp.send('Page.reload', {}, sessionId);
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const state = await evaluate(`({
+          ready: document.readyState,
+          blazor: typeof window.Blazor !== 'undefined',
+          buttons: document.querySelectorAll('button').length
+        })`);
+        if (state?.ready === 'complete' && state.blazor === true && state.buttons > 0) break;
+        await sleep(100);
+      }
+      await sleep(1800);
+    }
+
+    // Atributo de um elemento após uma ação (ex.: aria-expanded da pasta).
+    if (step.expectAttribute) {
+      const { selector, name, value } = step.expectAttribute;
+      let actual = null;
+      for (let attempt = 0; attempt < 80; attempt++) {
+        actual = await evaluate(
+          `document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(name)}) ?? null`);
+        if (actual === value) break;
+        await sleep(100);
+      }
+      if (actual !== value) {
+        problems.push(`${interaction.name}: ${selector} @${name} deveria ser "${value}", veio "${actual}". Página: ${await debugPageText()}`);
         return;
       }
     }

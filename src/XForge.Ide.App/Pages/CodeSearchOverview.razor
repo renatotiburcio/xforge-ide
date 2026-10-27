@@ -19,6 +19,7 @@
 @inject IdeUiState Ui
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject UiStatePersistor Snapshots
 @implements IAsyncDisposable
 
 <PageTitle>XForge IDE — Busca global</PageTitle>
@@ -532,6 +533,8 @@
 
             // grava o histórico só quando o termo "assenta" (debounce próprio)
             _ = SaveHistoryDebouncedAsync();
+            // snapshot do filtro: o F5 devolve a busca como estava
+            SaveFilterSnapshot();
         }
         catch (OperationCanceledException)
         {
@@ -735,8 +738,53 @@
         if (firstRender)
         {
             await LoadHistoryAsync();
+            await RestoreFilterSnapshotAsync();
         }
     }
+
+    /// <summary>Devolve o último filtro de busca (F5 não perde o que estava pesquisando).</summary>
+    private async Task RestoreFilterSnapshotAsync()
+    {
+        // O shell restaura o projeto no primeiro render desta página pode rodar
+        // antes: sem o projeto a chave do snapshot ficaria "global" e não acharia
+        // nada. Espera o projeto chegar (no máx. ~2s).
+        for (var tentativa = 0; tentativa < 20 && Ui.CurrentProject is null; tentativa++)
+        {
+            await Task.Delay(100);
+        }
+
+        if (Ui.CurrentProject is null)
+        {
+            return;
+        }
+
+        var snapshot = await Snapshots.RestoreAsync<SearchFilterSnapshot>(
+            "/code/search", Ui.CurrentProject.Id);
+        if (snapshot is null)
+        {
+            return;
+        }
+
+        _term = snapshot.Term;
+        _include = snapshot.Include;
+        _exclude = snapshot.Exclude;
+        _replacement = snapshot.Replacement;
+        _caseSensitive = snapshot.CaseSensitive;
+        _wholeWord = snapshot.WholeWord;
+        _regex = snapshot.Regex;
+        _showReplace = !string.IsNullOrEmpty(_replacement);
+
+        if (_term.Length > 0 && Ui.CurrentProject is not null)
+        {
+            await RunSearchAsync();
+        }
+        StateHasChanged();
+    }
+
+    private void SaveFilterSnapshot()
+        => Snapshots.Save("/code/search", Ui.CurrentProject?.Id,
+            new SearchFilterSnapshot(_term, _include, _exclude, _replacement,
+                _caseSensitive, _wholeWord, _regex));
 
     // ------------------------------------------------------------ substituição
 

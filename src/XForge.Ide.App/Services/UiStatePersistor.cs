@@ -180,3 +180,16 @@ public sealed class UiStatePersistor : IAsyncDisposable
 /// do projeto (assim o snapshot sobrevive a mudanca de caminho do projeto).
 /// </summary>
 public sealed record ExplorerSnapshot(IReadOnlyList<string> ExpandedPaths);
+
+/// <summary>Ultimo filtro da busca global (o F5 devolve a pesquisa como estava).</summary>
+public sealed record SearchFilterSnapshot(
+    string Term,
+    string Include,
+    string Exclude,
+    string Replacement,
+    bool CaseSensitive,
+    bool WholeWord,
+    bool Regex);
+
+/// <summary>Diagrama ER: dicionário selecionado (o zoom/pan faz auto-fit ao abrir).</summary>
+public sealed record ErDiagramSnapshot(Guid? DictionaryId);

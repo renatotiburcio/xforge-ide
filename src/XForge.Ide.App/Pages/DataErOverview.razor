@@ -10,6 +10,7 @@
 @using XForge.DesignSystem.Components.DataDisplay.Badge
 @inject DictionaryService Dictionaries
 @inject IdeUiState Ui
+@inject XForge.Ide.App.Services.UiStatePersistor Snapshots
 
 <PageTitle>XForge IDE — Diagrama ER</PageTitle>
 
@@ -240,7 +241,14 @@
         _dictionaries = await Dictionaries.ListByProjectAsync(Ui.CurrentProject.Id);
         if (_dictionaries.Count > 0)
         {
-            await LoadAsync(_dictionaries[0].Id);
+            // snapshot: devolve o último dicionário aberto (senão, o primeiro)
+            var selecionado = _dictionaries[0].Id;
+            var snapshot = await Snapshots.RestoreAsync<ErDiagramSnapshot>("/data/er", Ui.CurrentProject.Id);
+            if (snapshot?.DictionaryId is { } salvo && _dictionaries.Any(d => d.Id == salvo))
+            {
+                selecionado = salvo;
+            }
+            await LoadAsync(selecionado);
         }
         else
         {
@@ -259,6 +267,8 @@
         {
             _message = "Dicionário sem entidades.";
         }
+        // snapshot da seleção (o F5 devolve o diagrama do dicionário aberto)
+        Snapshots.Save("/data/er", Ui.CurrentProject?.Id, new ErDiagramSnapshot(dictionaryId));
         StateHasChanged();
     }
 
