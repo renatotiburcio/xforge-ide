@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIdeSessionRepository, IdeSessionRepository>();
         services.AddScoped<IIdePreferenceRepository, IdePreferenceRepository>();
         services.AddScoped<XForge.Ide.Application.Services.IIdeSessionStore, IdeSessionStore>();
+        services.AddScoped<IUiSnapshotStore, UiSnapshotRepository>();
         return services;
     }
 }

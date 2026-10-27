@@ -43,6 +43,9 @@ builder.Services.AddScoped<XForge.Ide.App.Services.IdeEditorState>();
 // preferências do editor (fonte, tab, wrap, minimapa)
 builder.Services.AddScoped<XForge.Ide.App.Services.IdeEditorPreferences>();
 
+// snapshots de interface ("onde eu estava") — sobrevivem ao F5
+builder.Services.AddScoped<XForge.Ide.App.Services.UiStatePersistor>();
+
 // build/run dos projetos gerados com saída em tempo real
 builder.Services.AddSingleton<BuildRunService>();
 

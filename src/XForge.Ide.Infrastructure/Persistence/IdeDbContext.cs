@@ -26,6 +26,7 @@ public class IdeDbContext : DbContext
     public DbSet<IdeSession> Sessions => Set<IdeSession>();
     public DbSet<GitSetting> GitSettings => Set<GitSetting>();
     public DbSet<McpToolLog> McpToolLogs => Set<McpToolLog>();
+    public DbSet<UiSnapshot> UiSnapshots => Set<UiSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -142,5 +143,14 @@ public class IdeDbContext : DbContext
         });
 
         b.Entity<McpToolLog>(e => e.HasKey(x => x.Id));
+
+        b.Entity<UiSnapshot>(e =>
+        {
+            // um snapshot por rota/projeto — mesma convenção do IdeSession
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).IsRequired().HasMaxLength(300);
+            e.Property(x => x.Route).HasMaxLength(200);
+            e.Property(x => x.Json).HasMaxLength(16000);
+        });
     }
 }

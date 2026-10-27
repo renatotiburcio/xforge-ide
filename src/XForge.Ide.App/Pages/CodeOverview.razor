@@ -16,6 +16,7 @@
 @inject IIdeSessionStore IdeSession
 @inject NavigationManager Nav
 @inject XForge.Ide.Application.Services.ProjectService Projects
+@inject UiStatePersistor Snapshots
 @implements IAsyncDisposable
 
 <PageTitle>XForge IDE — Editor de Código</PageTitle>
@@ -766,6 +767,89 @@
         {
             _rootNodes.Add(new Node { Name = e.Name, Path = e.Path, IsDirectory = e.IsDirectory });
         }
+
+        // restaura as pastas expandidas do snapshot (F5 devolve a árvore como estava)
+        var snapshot = await Snapshots.RestoreAsync<ExplorerSnapshot>("/code", Ui.CurrentProject.Id);
+        if (snapshot?.ExpandedPaths is { Count: > 0 } paths)
+        {
+            await RestoreExpandedAsync(paths);
+        }
+    }
+
+    /// <summary>Reexpande os caminhos do snapshot (relativos à raiz do projeto).</summary>
+    private async Task RestoreExpandedAsync(IReadOnlyList<string> expandedPaths)
+    {
+        if (Ui.CurrentProject is null)
+        {
+            return;
+        }
+
+        foreach (var relative in expandedPaths)
+        {
+            var parts = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+            {
+                continue;
+            }
+
+            var current = Ui.CurrentProject.Path;
+            var level = _rootNodes.AsEnumerable();
+            foreach (var part in parts)
+            {
+                current = Path.Combine(current, part);
+                var node = level.FirstOrDefault(n =>
+                    n.IsDirectory && n.Path.Equals(current, StringComparison.OrdinalIgnoreCase));
+                if (node is null)
+                {
+                    break; // pasta não existe mais: ignora o resto deste caminho
+                }
+
+                if (!node.Expanded)
+                {
+                    node.Expanded = true;
+                    node.Children.Clear();
+                    var children = await Files.ListAsync(node.Path);
+                    foreach (var e in children.Where(e => !e.Name.StartsWith(".") && e.Name is not ("bin" or "obj")))
+                    {
+                        node.Children.Add(new Node { Name = e.Name, Path = e.Path, IsDirectory = e.IsDirectory });
+                    }
+                }
+                level = node.Children.AsEnumerable();
+            }
+        }
+    }
+
+    /// <summary>Caminhos expandidos relativos à raiz (estável se o projeto mudar de lugar).</summary>
+    private List<string> ExpandedRelativePaths()
+    {
+        var root = Ui.CurrentProject?.Path ?? string.Empty;
+        var result = new List<string>();
+        void Walk(IEnumerable<Node> nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (!n.IsDirectory || !n.Expanded)
+                {
+                    continue;
+                }
+                if (root.Length > 0 && n.Path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(Path.GetRelativePath(root, n.Path));
+                }
+                Walk(n.Children);
+            }
+        }
+        Walk(_rootNodes);
+        return result;
+    }
+
+    private void SaveExplorerSnapshot()
+    {
+        if (Ui.CurrentProject is null)
+        {
+            return;
+        }
+        Snapshots.Save("/code", Ui.CurrentProject.Id, new ExplorerSnapshot(ExpandedRelativePaths()));
     }
 
     /// <summary>Avança uma página dos nós raiz do Explorer.</summary>
@@ -800,6 +884,8 @@
                         node.Children.Add(new Node { Name = e.Name, Path = e.Path, IsDirectory = e.IsDirectory });
                     }
                 }
+                // snapshot: pastas expandidas sobrevivem ao F5 (gravação com debounce)
+                SaveExplorerSnapshot();
                 StateHasChanged();
             }));
             builder.OpenElement(seq++, "span");
@@ -1157,6 +1243,7 @@
         Ui.Changed -= OnUiStateChanged;
         Output.Changed -= OnOutputChanged;
         _self?.Dispose();
-        await Task.CompletedTask;
+        // garante a gravação dos snapshots pendentes ao sair da rota
+        await Snapshots.FlushAsync();
     }
 }
