@@ -116,7 +116,11 @@
                     <DictionaryWorkspace Entities="_entities" Entity="@_currentEntity"
                                          EntitySelected="OnEntitySelectedAsync"
                                          OnNewEntity="OpenEntityModalAsync"
-                                         Changed="OnEntityChangedAsync" />
+                                         Changed="OnEntityChangedAsync"
+                                         FieldId="_fieldId"
+                                         FieldIdChanged="OnFieldSelectedAsync"
+                                         TabIndex="_tab"
+                                         TabIndexChanged="OnTabChangedAsync" />
                 </ChildContent>
             </XFCard>
         }
@@ -525,18 +529,23 @@
         StateHasChanged();
     }
 
-    private async Task OpenDictionaryAsync(DictionaryDto d)
+    /// <summary>
+    /// Abre o dicionário. <paramref name="syncUrl"/> é false quando a chamada
+    /// vem da própria URL (restauração de F5) — navegar ali reescreveria a URL
+    /// com o estado ainda vazio e dispararia outro OnParametersSetAsync.
+    /// </summary>
+    private async Task OpenDictionaryAsync(DictionaryDto d, bool syncUrl = true)
     {
         _currentDictionary = d;
         _currentEntity = null;
+        _fieldId = null;
+        _tab = 0;
         _entities = await Dictionaries.ListEntitiesAsync(d.Id);
         await LoadRelationsAsync();
         await ReloadDictionariesAsync();
-
-        // URL canônica (?dict=<id>): sustenta a seleção na sidebar e sobrevive a F5
-        if (!Nav.Uri.Contains($"dict={d.Id}", StringComparison.OrdinalIgnoreCase))
+        if (syncUrl)
         {
-            Nav.NavigateTo($"/data?dict={d.Id}");
+            await SyncUrlAsync();
         }
     }
 
@@ -548,9 +557,16 @@
     /// Sidebar navega para /data?dict=&lt;id&gt;: abre o dicionário no workspace,
     /// sem sessão/tela separada por dicionário. O parâmetro supply-from-query
     /// é o que faz o Router re-renderizar a página na troca só de query.
+    /// A URL também carrega a tabela (?entity=), a coluna (?field=) e a aba
+    /// (?tab=) do Property Sheet — o F5 devolve o workspace inteiro.
     /// </summary>
     protected override async Task OnParametersSetAsync()
     {
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(Nav.Uri).Query);
+        var entityId = Guid.TryParse(query["entity"], out var parsedEntity) ? parsedEntity : (Guid?)null;
+        var fieldId = Guid.TryParse(query["field"], out var parsedField) ? parsedField : (Guid?)null;
+        var tab = TabFromName(query["tab"]);
+
         if (Guid.TryParse(DictQuery, out var dictId) && _currentDictionary?.Id != dictId)
         {
             var target = _dictionaries.FirstOrDefault(d => d.Id == dictId);
@@ -562,16 +578,110 @@
 
             if (target is not null)
             {
-                await OpenDictionaryAsync(target);
+                // sem sync: a URL já é a fonte da verdade nesta restauração
+                await OpenDictionaryAsync(target, syncUrl: false);
             }
             else
             {
                 _message = "Dicionário não encontrado.";
             }
-            StateHasChanged();
         }
 
+        // aplica o resto da URL DEPOIS do reset do OpenDictionaryAsync
+        _fieldId = fieldId;
+        _tab = tab;
+
+        // tabela da URL: GetEntityAsync traz campos/chaves para o Property Sheet
+        if (_currentDictionary is not null && entityId is Guid id && _currentEntity?.Id != id)
+        {
+            var fresh = await Dictionaries.GetEntityAsync(id);
+            if (fresh is not null)
+            {
+                _currentEntity = fresh;
+            }
+        }
+
+        StateHasChanged();
         await base.OnParametersSetAsync();
+    }
+
+    // ------------------------------------------------- URL: espelho do workspace
+
+    private Guid? _fieldId;
+    private int _tab;
+
+    private static string TabName(int tab) => tab switch
+    {
+        1 => "picture",
+        2 => "advanced",
+        _ => "general"
+    };
+
+    private static int TabFromName(string? name) => name?.Trim().ToLowerInvariant() switch
+    {
+        "picture" => 1,
+        "advanced" => 2,
+        _ => 0
+    };
+
+    /// <summary>URL que espelha o estado atual do workspace (dict/entity/field/tab).</summary>
+    private string CurrentDataUrl()
+    {
+        var parts = new List<string>();
+        if (_currentDictionary is not null)
+        {
+            parts.Add("dict=" + _currentDictionary.Id);
+        }
+        if (_currentEntity is not null)
+        {
+            parts.Add("entity=" + _currentEntity.Id);
+        }
+        if (_currentEntity is not null && _fieldId is Guid fieldId)
+        {
+            parts.Add("field=" + fieldId);
+            if (_tab != 0)
+            {
+                parts.Add("tab=" + TabName(_tab));
+            }
+        }
+        return parts.Count == 0 ? "/data" : "/data?" + string.Join("&", parts);
+    }
+
+    /// <summary>
+    /// Grava a URL somente quando ela difere do estado atual (evita laço com
+    /// OnParametersSetAsync). replace: true não polui o histórico do navegador.
+    /// </summary>
+    private Task SyncUrlAsync()
+    {
+        var url = CurrentDataUrl();
+        if (!string.Equals(new Uri(Nav.Uri).PathAndQuery, url, StringComparison.OrdinalIgnoreCase))
+        {
+            Nav.NavigateTo(url, replace: true);
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task OnEntitySelectedAsync(EntityDto e)
+    {
+        _currentEntity = await Dictionaries.GetEntityAsync(e.Id);
+        _fieldId = null;
+        _tab = 0;
+        await SyncUrlAsync();
+        StateHasChanged();
+    }
+
+    private async Task OnFieldSelectedAsync(Guid? fieldId)
+    {
+        _fieldId = fieldId;
+        // trocar de coluna volta a aba do Property Sheet para "Geral"
+        _tab = 0;
+        await SyncUrlAsync();
+    }
+
+    private async Task OnTabChangedAsync(int tab)
+    {
+        _tab = tab;
+        await SyncUrlAsync();
     }
 
     private Task AskDeleteDictAsync(DictionaryDto d)
@@ -648,20 +758,17 @@
             _showEntityModal = false;
             _entities = await Dictionaries.ListEntitiesAsync(_currentDictionary.Id);
             _currentEntity = await Dictionaries.GetEntityAsync(result.Value.Id);
+            _fieldId = null;
+            _tab = 0;
         await LoadRelationsAsync();
         await ReloadDictionariesAsync();
+            await SyncUrlAsync();
             _message = $"Entidade '{result.Value.Name}' criada (com chave primária Id).";
         }
         else
         {
             _message = result.Error;
         }
-    }
-
-    private async Task OnEntitySelectedAsync(EntityDto e)
-    {
-        _currentEntity = await Dictionaries.GetEntityAsync(e.Id);
-        StateHasChanged();
     }
 
     /// <summary>Abre as propriedades da entidade selecionada (≈ Table Properties).</summary>
@@ -728,6 +835,10 @@
         await ReloadDictionariesAsync();
             }
             _message = $"Entidade '{e.Name}' excluída.";
+            // URL deixa de apontar para a entidade excluída
+            _fieldId = null;
+            _tab = 0;
+            await SyncUrlAsync();
         };
         _showDeleteConfirm = true;
         return Task.CompletedTask;

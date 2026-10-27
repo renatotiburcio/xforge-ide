@@ -117,11 +117,11 @@
 
             <div class="ide-dict__tabs" role="tablist" aria-label="Propriedades da coluna">
                 <button role="tab" id="ide-dict-tab-general" aria-selected="true" aria-controls="ide-dict-panel-general"
-                        class="ide-dict__tab ide-dict__tab--active" @onclick="() => _tab = 0">Geral</button>
+                        class="ide-dict__tab ide-dict__tab--active" @onclick="() => SetTabAsync(0)">Geral</button>
                 <button role="tab" id="ide-dict-tab-picture" aria-selected="@(_tab == 1 ? "true" : "false")" aria-controls="ide-dict-panel-picture"
-                        class="ide-dict__tab @(_tab == 1 ? "ide-dict__tab--active" : null)" @onclick="() => _tab = 1">Picture</button>
+                        class="ide-dict__tab @(_tab == 1 ? "ide-dict__tab--active" : null)" @onclick="() => SetTabAsync(1)">Picture</button>
                 <button role="tab" id="ide-dict-tab-advanced" aria-selected="@(_tab == 2 ? "true" : "false")" aria-controls="ide-dict-panel-advanced"
-                        class="ide-dict__tab @(_tab == 2 ? "ide-dict__tab--active" : null)" @onclick="() => _tab = 2">Avançado</button>
+                        class="ide-dict__tab @(_tab == 2 ? "ide-dict__tab--active" : null)" @onclick="() => SetTabAsync(2)">Avançado</button>
             </div>
 
             @* ------------------------------------------------------------- Geral *@
@@ -288,6 +288,21 @@
     /// <summary>Resumo das tabelas do dicionário (para o Explorer).</summary>
     [Parameter, EditorRequired] public IReadOnlyList<EntityDto> Entities { get; set; } = Array.Empty<EntityDto>();
 
+    /// <summary>
+    /// Coluna selecionada vinda da URL (?field=&lt;id&gt;). O workspace é a fonte da
+    /// verdade durante a sessão; este parâmetro restaura a seleção após F5.
+    /// </summary>
+    [Parameter] public Guid? FieldId { get; set; }
+
+    /// <summary>Notifica o pai quando a coluna selecionada muda (grava na URL).</summary>
+    [Parameter] public EventCallback<Guid?> FieldIdChanged { get; set; }
+
+    /// <summary>Aba ativa do Property Sheet vinda da URL (?tab=general|picture|advanced).</summary>
+    [Parameter] public int TabIndex { get; set; }
+
+    /// <summary>Notifica o pai quando a aba muda (grava na URL).</summary>
+    [Parameter] public EventCallback<int> TabIndexChanged { get; set; }
+
     private EntityDto? _currentEntity;
     private EntityFieldDto? _draft;
     private EntityFieldDto? _persisted;
@@ -332,6 +347,24 @@
             _draft = null;
             _persisted = null;
             _selectedFieldId = null;
+
+            // entidade nova: aplica a coluna da URL (restauração de F5)
+            if (FieldId is { } restoredId && Entity?.Fields.FirstOrDefault(f => f.Id == restoredId) is { } restored)
+            {
+                SelectField(restored);
+            }
+        }
+        else if (FieldId is { } fieldId && fieldId != _selectedFieldId
+                 && _currentEntity?.Fields.FirstOrDefault(f => f.Id == fieldId) is { } match)
+        {
+            // mesma entidade, seleção mudada por fora (URL)
+            SelectField(match);
+        }
+
+        // aba do Property Sheet (URL)
+        if (TabIndex != _tab)
+        {
+            _tab = TabIndex;
         }
     }
 
@@ -341,12 +374,17 @@
         _draft = null;
         _persisted = null;
         _selectedFieldId = null;
+        // o pai grava a nova tabela na URL primeiro; a coluna/aba são limpas
+        // em seguida (já não fazem parte da URL nova)
         await EntitySelected.InvokeAsync(entity);
+        await FieldIdChanged.InvokeAsync(null);
+        await TabIndexChanged.InvokeAsync(0);
     }
 
     private Task OnNewEntityAsync() => OnNewEntity.InvokeAsync();
 
-    private Task SelectFieldAsync(EntityFieldDto f)
+    /// <summary>Seleção sincrona (usada por clique e por restauração da URL).</summary>
+    private void SelectField(EntityFieldDto f)
     {
         _selectedFieldId = f.Id;
         _draft = f;
@@ -355,8 +393,20 @@
         _tab = 0;
         _message = null;
         _error = false;
+    }
+
+    private async Task SelectFieldAsync(EntityFieldDto f)
+    {
+        SelectField(f);
+        // o pai (DataOverview) zera a aba na URL ao trocar de coluna
+        await FieldIdChanged.InvokeAsync(f.Id);
         StateHasChanged();
-        return Task.CompletedTask;
+    }
+
+    private async Task SetTabAsync(int tab)
+    {
+        _tab = tab;
+        await TabIndexChanged.InvokeAsync(tab);
     }
 
     private Task OnDraftChangedAsync(Func<EntityFieldDto, EntityFieldDto> change)
@@ -525,6 +575,8 @@
         _selectedFieldId = null;
         _message = "Coluna excluída.";
         _error = false;
+        // a coluna excluída sai da URL
+        await FieldIdChanged.InvokeAsync(null);
         await ReloadAsync();
         StateHasChanged();
     }
