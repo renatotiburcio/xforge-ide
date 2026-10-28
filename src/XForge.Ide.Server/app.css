@@ -140,11 +140,32 @@
 }
 
 /* ============================================================================
- * FOCO VISÍVEL — padrão único para teclado/leitores de tela
+ * FOCO VISÍVEL - padrão único para teclado/leitores de tela
  * ============================================================================ */
 :focus-visible {
   outline: 2px solid var(--color-border-focus, rgb(59 130 246));
   outline-offset: 2px;
+}
+
+/* Campos do design system (XFTextInput, XFSelect, XFCombobox, ...) já pintam o
+   foco na casca do campo (borda + anel via focus-within) — o indicador continua
+   visível para teclado. O outline global, aqui dentro, só somava uma linha
+   extra dentro do campo (a "borda interna" sobreposta à borda da casca). */
+.xf-text-input :focus-visible,
+.xf-select :focus-visible,
+.xf-combobox :focus-visible,
+.xf-autocomplete :focus-visible,
+.xf-multiselect :focus-visible,
+.xf-dropdown-datagrid :focus-visible,
+.xf-transfer-list :focus-visible,
+.xf-color-picker :focus-visible,
+.xf-number-input :focus-visible,
+.xf-textarea :focus-visible,
+.xf-input-mask :focus-visible,
+.xf-file-input :focus-visible,
+.xf-date-input :focus-visible,
+.xf-date-picker :focus-visible {
+  outline: none;
 }
 
 /* ============================================================================ */
