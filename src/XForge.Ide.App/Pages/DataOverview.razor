@@ -120,7 +120,69 @@
                                          FieldId="_fieldId"
                                          FieldIdChanged="OnFieldSelectedAsync"
                                          TabIndex="_tab"
-                                         TabIndexChanged="OnTabChangedAsync" />
+                                         TabIndexChanged="OnTabChangedAsync"
+                                         GlobalFields="_globalFields" />
+                </ChildContent>
+            </XFCard>
+        }
+
+        @* ---------------------------------------------- colunas globais (Derived From) *@
+        @if (_currentDictionary is not null)
+        {
+            <XFCard Variant="XFCardVariant.Outlined" Padding="XFPadding.Lg">
+                <ChildContent>
+                    <XFStack Orientation="XFOrientation.Horizontal" Gap="3" AlignItems="XFAlignItems.Center">
+                        <XFTypography Variant="XFTypographyVariant.H3" Weight="XFTypographyWeight.Semibold">
+                            Colunas globais de @_currentDictionary.Name
+                        </XFTypography>
+                        <XFButton Text="Adicionar coluna global" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Primary"
+                                  OnClick="OpenGlobalModalAsync" />
+                    </XFStack>
+
+                    <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="mt-1">
+                        ≈ "Derived From" do Clarion: defina a coluna UMA vez e derive em N tabelas.
+                        Alterar o modelo aqui propaga para todos os campos derivados.
+                    </XFTypography>
+
+                    @if (_globalFields.Count == 0)
+                    {
+                        <XFTypography Variant="XFTypographyVariant.Body2" Color="XFTypographyColor.Secondary" Class="mt-3">
+                            Nenhuma coluna global. Crie uma e use "Derivar de" no modal de adicionar coluna.
+                        </XFTypography>
+                    }
+                    else
+                    {
+                        <XFTable Striped="true" Hoverable="true" Compact="true" Class="mt-3">
+                            <XFTableHeader>
+                                <XFTableRow>
+                                    <XFTableCell Header="true">Nome</XFTableCell>
+                                    <XFTableCell Header="true">Tipo</XFTableCell>
+                                    <XFTableCell Header="true">Picture</XFTableCell>
+                                    <XFTableCell Header="true">Obrig.</XFTableCell>
+                                    <XFTableCell Header="true">Ações</XFTableCell>
+                                </XFTableRow>
+                            </XFTableHeader>
+                            <XFTableBody>
+                                @foreach (var g in _globalFields)
+                                {
+                                    <XFTableRow>
+                                        <XFTableCell>@g.Name</XFTableCell>
+                                        <XFTableCell>@g.ClrType@(g.Length is not null ? "(" + g.Length + ")" : "")</XFTableCell>
+                                        <XFTableCell>@(g.Picture ?? "—")</XFTableCell>
+                                        <XFTableCell>@(g.Required ? "sim" : "não")</XFTableCell>
+                                        <XFTableCell>
+                                            <div class="flex gap-2">
+                                                <XFButton Text="Editar" AriaLabel="@($"Editar coluna global {g.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
+                                                          OnClick="() => OpenGlobalEditModalAsync(g)" />
+                                                <XFButton Text="Excluir" AriaLabel="@($"Excluir coluna global {g.Name}")" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Danger" Size="XFExtendedSize.Sm"
+                                                          OnClick="() => AskDeleteGlobalAsync(g)" />
+                                            </div>
+                                        </XFTableCell>
+                                    </XFTableRow>
+                                }
+                            </XFTableBody>
+                        </XFTable>
+                    }
                 </ChildContent>
             </XFCard>
         }
@@ -210,6 +272,35 @@
                  Value="@_dictName" ValueChanged="(string v) => _dictName = v ?? string.Empty" />
 </Modal>
 
+@* ==================================================== Modal: coluna global (Derived From) *@
+<Modal Open="@_showGlobalModal" OpenChanged="OnGlobalModalChanged"
+       Title="@(_editingGlobalId is null ? "Nova coluna global" : "Editar coluna global")"
+       Description="Alterar o modelo propaga para todos os campos derivados dele."
+       ConfirmText="Salvar" ConfirmAction="SaveGlobalAsync">
+    <div class="grid gap-4 md:grid-cols-2">
+        <XFTextInput Label="Nome *" Placeholder="NomeCliente"
+                     Value="@_globalName" ValueChanged="(string v) => _globalName = v ?? string.Empty" />
+        <XFCombobox TItem="string" TValue="string" Label="Tipo *" Placeholder="Selecione"
+                    Items="@FieldRules.ClrTypes" TextSelector="@(t => t)" ValueSelector="@(t => t)"
+                    Value="@_globalClrType" ValueChanged='(string? v) => _globalClrType = v ?? "string"' />
+        <XFTextInput Label="Picture (opcional)" Placeholder="@@s40"
+                     Value="@_globalPicture" ValueChanged="(string v) => _globalPicture = v" />
+        <XFTextInput Label="Rótulo (opcional)" Placeholder="Nome do cliente"
+                     Value="@_globalLabel" ValueChanged="(string? v) => _globalLabel = v" />
+        <XFTextInput Label="Caracteres (opcional)" Placeholder="50"
+                     Value="@_globalLength" ValueChanged="(string v) => _globalLength = v" />
+        <XFTextInput Label="Valor padrão (opcional)" Placeholder="(nenhum)"
+                     Value="@_globalDefault" ValueChanged="(string? v) => _globalDefault = v" />
+        <XFTextInput Label="Descrição (opcional)" Placeholder="Documentação do modelo"
+                     Value="@_globalDescription" ValueChanged="(string? v) => _globalDescription = v" />
+        <XFCheckbox Label="Obrigatório" Value="@_globalRequired" ValueChanged="(bool? v) => _globalRequired = v ?? false" />
+    </div>
+    @if (_globalError is not null)
+    {
+        <div role="alert" class="ide-dict__status ide-dict__status--error">@_globalError</div>
+    }
+</Modal>
+
 @* ====================================================== Modal: editar dicionário *@
 <Modal Open="@_showDictEditModal" OpenChanged="OnDictEditModalChanged"
        Title="Editar dicionário" Description="Renomeia o dicionário aberto (≈ renomear o .DCT no Clarion)."
@@ -262,6 +353,7 @@
     private IReadOnlyList<EntityDto> _entities = Array.Empty<EntityDto>();
     private EntityDto? _currentEntity;
     private IReadOnlyList<EntityRelationDto> _relations = Array.Empty<EntityRelationDto>();
+    private IReadOnlyList<GlobalFieldDto> _globalFields = Array.Empty<GlobalFieldDto>();
     private int _dictionaryPage = 1;
     private int _relationPage = 1;
     private const int PageSize = 20;
@@ -541,6 +633,7 @@
         _fieldId = null;
         _tab = 0;
         _entities = await Dictionaries.ListEntitiesAsync(d.Id);
+        _globalFields = await Dictionaries.ListGlobalFieldsAsync(d.Id);
         await LoadRelationsAsync();
         await ReloadDictionariesAsync();
         if (syncUrl)
@@ -705,6 +798,135 @@
             {
                 Nav.NavigateTo("/data");
             }
+        };
+        _showDeleteConfirm = true;
+        return Task.CompletedTask;
+    }
+
+    // -------------------------------------------- colunas globais (Derived From)
+
+    private bool _showGlobalModal;
+    private Guid? _editingGlobalId;
+    private string _globalName = string.Empty;
+    private string _globalClrType = "string";
+    private string? _globalPicture;
+    private string? _globalLabel;
+    private string _globalLength = string.Empty;
+    private string? _globalDefault;
+    private string? _globalDescription;
+    private bool _globalRequired;
+    private string? _globalError;
+
+    private Task OpenGlobalModalAsync()
+    {
+        _editingGlobalId = null;
+        _globalName = string.Empty;
+        _globalClrType = "string";
+        _globalPicture = null;
+        _globalLabel = null;
+        _globalLength = string.Empty;
+        _globalDefault = null;
+        _globalDescription = null;
+        _globalRequired = false;
+        _globalError = null;
+        _showGlobalModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OpenGlobalEditModalAsync(GlobalFieldDto g)
+    {
+        _editingGlobalId = g.Id;
+        _globalName = g.Name;
+        _globalClrType = g.ClrType;
+        _globalPicture = g.Picture;
+        _globalLabel = g.Label;
+        _globalLength = g.Length?.ToString() ?? string.Empty;
+        _globalDefault = g.Default;
+        _globalDescription = g.Description;
+        _globalRequired = g.Required;
+        _globalError = null;
+        _showGlobalModal = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnGlobalModalChanged(bool open)
+    {
+        _showGlobalModal = open;
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveGlobalAsync()
+    {
+        if (_currentDictionary is null)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_globalName))
+        {
+            _globalError = "Informe o nome da coluna global.";
+            StateHasChanged();
+            return;
+        }
+
+        var pictureError = FieldRules.ValidatePicture(_globalPicture);
+        if (pictureError is not null)
+        {
+            _globalError = pictureError;
+            StateHasChanged();
+            return;
+        }
+
+        var length = FieldRules.TypeAcceptsLength(_globalClrType)
+            ? FieldRules.ParseOptionalInt(_globalLength) ?? FieldRules.DefaultStringLength
+            : (int?)null;
+
+        if (_editingGlobalId is Guid id)
+        {
+            var result = await Dictionaries.UpdateGlobalFieldAsync(new(
+                id, _globalName.Trim(), _globalClrType, length, _globalPicture, _globalLabel,
+                _globalDefault, _globalRequired, _globalDescription));
+            if (!result.IsSuccess)
+            {
+                _globalError = result.Error;
+                StateHasChanged();
+                return;
+            }
+            _message = $"Coluna global '{result.Value.Name}' atualizada (propagada para os campos derivados).";
+        }
+        else
+        {
+            var result = await Dictionaries.AddGlobalFieldAsync(new(
+                _currentDictionary.Id, _globalName.Trim(), _globalClrType, length, _globalPicture,
+                _globalLabel, _globalDefault, _globalRequired, _globalDescription));
+            if (!result.IsSuccess)
+            {
+                _globalError = result.Error;
+                StateHasChanged();
+                return;
+            }
+            _message = $"Coluna global '{result.Value.Name}' criada.";
+        }
+
+        _showGlobalModal = false;
+        _globalFields = await Dictionaries.ListGlobalFieldsAsync(_currentDictionary.Id);
+        // recarrega a entidade aberta: a propagação renomeou campos derivados
+        await OnEntityChangedAsync();
+    }
+
+    private Task AskDeleteGlobalAsync(GlobalFieldDto g)
+    {
+        _deleteTitle = "Excluir coluna global";
+        _deleteMessage = "Os campos derivados permanecem nas entidades (apenas perdem o vínculo com o modelo).";
+        _deleteTargetName = g.Name;
+        _deleteAction = async () =>
+        {
+            await Dictionaries.DeleteGlobalFieldAsync(g.Id);
+            if (_currentDictionary is not null)
+            {
+                _globalFields = await Dictionaries.ListGlobalFieldsAsync(_currentDictionary.Id);
+            }
+            _message = $"Coluna global '{g.Name}' excluída.";
+            await OnEntityChangedAsync();
         };
         _showDeleteConfirm = true;
         return Task.CompletedTask;

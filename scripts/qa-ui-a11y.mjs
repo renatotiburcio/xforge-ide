@@ -755,7 +755,11 @@ async function runInteraction(interaction, problems) {
 
   if (interaction.ensureProject) {
     console.error('[qa] ensureProject check');
-    const hasProject = await evaluate(`!!document.querySelector('button[aria-label^="Abrir "]')`);
+    // o projeto do gate é identificado pelo aria-label do botão "Abrir":
+    // sem isso, o gate abriria o primeiro projeto da lista (ex.: fixtures
+    // de E2E com diretório vazio) e as interações do /code quebrariam.
+    const qaProjectButton = 'button[aria-label="Abrir Projeto QA Gate"]';
+    const hasProject = await evaluate(`!!document.querySelector(${JSON.stringify(qaProjectButton)})`);
     console.error('[qa] ensureProject hasProject=' + hasProject);
     if (!hasProject) {
       const opened = await clickText('Novo projeto');
@@ -791,15 +795,21 @@ async function runInteraction(interaction, problems) {
       }
     }
 
-    const openedProject = await clickSelector('button[aria-label^="Abrir "]');
+    const openedProject = await clickSelector(qaProjectButton);
     if (!openedProject) {
-      problems.push(`${interaction.name}: não foi possível abrir o projeto.`);
+      problems.push(`${interaction.name}: não foi possível abrir o projeto. Página: ${await debugPageText()}`);
       return;
     }
 
     const ready = await waitForText('aberto.');
     if (!ready) {
-      problems.push(`${interaction.name}: projeto não ficou ativo. Página: ${await debugPageText()}`);
+      problems.push(`${interaction.name}: projeto não confirmou a abertura. Página: ${await debugPageText()}`);
+      return;
+    }
+
+    const rightProject = await waitForText('Projeto QA Gate');
+    if (!rightProject) {
+      problems.push(`${interaction.name}: projeto aberto não é o do gate. Página: ${await debugPageText()}`);
       return;
     }
   }

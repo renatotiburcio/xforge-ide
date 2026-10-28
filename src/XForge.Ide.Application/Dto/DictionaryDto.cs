@@ -36,16 +36,37 @@ public record EntityFieldDto(
     string? Picture,
     string? Label,
     string? ExternalName,
-    int SortOrder)
+    int SortOrder,
+    /// <summary>Modelo de coluna global de origem (≈ Derived From do DCT).</summary>
+    Guid? DerivedFromId = null,
+    /// <summary>Nome legível do modelo (preenchido pelo serviço para a UI).</summary>
+    string? DerivedFromName = null)
 {
     public static EntityFieldDto From(EntityField f) => new(
         f.Id, f.Name, f.ClrType, f.DbType, f.Length, f.Precision, f.Required,
-        f.Default, f.Picture, f.Label, f.ExternalName, f.SortOrder);
+        f.Default, f.Picture, f.Label, f.ExternalName, f.SortOrder, f.DerivedFromId);
 }
 
 public record EntityKeyDto(Guid Id, string Name, bool IsPrimary, bool IsUnique, string FieldsJson)
 {
     public static EntityKeyDto From(EntityKey k) => new(k.Id, k.Name, k.IsPrimary, k.IsUnique, k.FieldsJson);
+}
+
+/// <summary>Coluna global (modelo de derivação ≈ "Derived From" do DCT).</summary>
+public record GlobalFieldDto(
+    Guid Id,
+    Guid DictionaryId,
+    string Name,
+    string ClrType,
+    int? Length,
+    string? Picture,
+    string? Label,
+    string? Default,
+    bool Required,
+    string? Description)
+{
+    public static GlobalFieldDto From(GlobalField g) => new(
+        g.Id, g.DictionaryId, g.Name, g.ClrType, g.Length, g.Picture, g.Label, g.Default, g.Required, g.Description);
 }
 
 /// <summary>Relacionamento entre entidades do dicionário.</summary>
@@ -138,7 +159,19 @@ public record UpdateEntityRequest(
     Guid EntityId, string Name, string TableName, string Provider, string? Prefix, string? ExternalName);
 public record CreateFieldRequest(
     Guid EntityId, string Name, string ClrType, string? DbType, int? Length, int? Precision,
-    bool Required, string? Default, string? Picture, string? Label, string? ExternalName);
+    bool Required, string? Default, string? Picture, string? Label, string? ExternalName)
+{
+    /// <summary>Modelo de coluna global de origem (≈ Derived From). Preenche o campo.</summary>
+    public Guid? DerivedFromId { get; init; }
+}
+
+public record CreateGlobalFieldRequest(
+    Guid DictionaryId, string Name, string ClrType, int? Length, string? Picture,
+    string? Label, string? Default, bool Required, string? Description);
+
+public record UpdateGlobalFieldRequest(
+    Guid GlobalFieldId, string Name, string ClrType, int? Length, string? Picture,
+    string? Label, string? Default, bool Required, string? Description);
 public record UpdateFieldRequest(
     Guid FieldId, string Name, string ClrType, string DbType, int? Length, int? Precision,
     bool Required, string? Default, string? Picture, string? Label, string? ExternalName);

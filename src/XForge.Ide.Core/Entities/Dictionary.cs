@@ -51,6 +51,9 @@ public class EntityField
     public string? Label { get; set; }
     public string? ExternalName { get; set; }
     public int SortOrder { get; set; }
+
+    /// <summary>Modelo de coluna global de onde este campo foi derivado (≈ Derived From).</summary>
+    public Guid? DerivedFromId { get; set; }
 }
 
 /// <summary>Chave/índice da entidade (≈ ChaveCodigo do Clarion).</summary>

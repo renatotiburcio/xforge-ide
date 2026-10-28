@@ -85,6 +85,10 @@
                         {
                             <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Success" Text="obrig" />
                         }
+                        @if (f.DerivedFromName is not null)
+                        {
+                            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="deriv" />
+                        }
                         <span class="ide-dict__row-label">@(f.Label ?? "—")</span>
                     </div>
                 }
@@ -113,6 +117,10 @@
                 {
                     <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="automático" />
                 }
+                @if (_isDerivedField)
+                {
+                    <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="derivada" />
+                }
             </div>
 
             <div class="ide-dict__tabs" role="tablist" aria-label="Propriedades da coluna">
@@ -130,8 +138,16 @@
                 <div class="ide-dict__panel" role="tabpanel" id="ide-dict-panel-general" aria-labelledby="ide-dict-tab-general">
                     <div class="ide-dict__field">
                         <label for="ide-dict-name">Nome da coluna</label>
-                        <input id="ide-dict-name" class="ide-dict__input" value="@draft.Name" disabled="@_isSystemField"
+                        <input id="ide-dict-name" class="ide-dict__input" value="@draft.Name"
+                               disabled="@(_isSystemField || _isDerivedField)"
                                @oninput="e => OnNameInputAsync(e)" />
+                        @if (_isDerivedField)
+                        {
+                            <span class="ide-dict__hint">
+                                Derivada da coluna global <strong>@draft.DerivedFromName</strong> — nome, tipo e
+                                picture seguem o modelo (altere o modelo para propagar).
+                            </span>
+                        }
                         @if (_errors.Name is not null)
                         {
                             <span class="ide-dict__error" role="alert">@_errors.Name</span>
@@ -140,11 +156,12 @@
                     <div class="ide-dict__field">
                         <label for="ide-dict-label">Rótulo (prompt)</label>
                         <input id="ide-dict-label" class="ide-dict__input" value="@draft.Label"
+                               disabled="@_isDerivedField"
                                @oninput="e => OnDraftChangedAsync(f => f with { Label = e.Value?.ToString() })" />
                     </div>
                     <div class="ide-dict__field">
                         <label for="ide-dict-clrtype">Tipo</label>
-                        <select id="ide-dict-clrtype" class="ide-dict__input" value="@draft.ClrType"
+                        <select id="ide-dict-clrtype" class="ide-dict__input" value="@draft.ClrType" disabled="@_isDerivedField"
                                 @onchange="e => OnDraftChangedAsync(f => f with { ClrType = e.Value?.ToString() ?? f.ClrType })">
                             @foreach (var t in FieldRules.ClrTypes)
                             {
@@ -155,7 +172,7 @@
                     <div class="ide-dict__field ide-dict__field--inline">
                         <label for="ide-dict-length">Caracteres</label>
                         <input id="ide-dict-length" class="ide-dict__input ide-dict__input--num" inputmode="numeric"
-                               value="@(draft.Length?.ToString() ?? string.Empty)" disabled="@(!FieldRules.TypeAcceptsLength(draft.ClrType))"
+                               value="@(draft.Length?.ToString() ?? string.Empty)" disabled="@(!FieldRules.TypeAcceptsLength(draft.ClrType) || _isDerivedField)"
                                @oninput="e => OnDraftChangedAsync(f => f with { Length = FieldRules.ParseOptionalInt(e.Value?.ToString()) })" />
                         @if (_errors.Length is not null)
                         {
@@ -164,7 +181,7 @@
                     </div>
                     <div class="ide-dict__field ide-dict__field--inline">
                         <label for="ide-dict-required">Obrigatório</label>
-                        <input id="ide-dict-required" type="checkbox" checked="@draft.Required"
+                        <input id="ide-dict-required" type="checkbox" checked="@draft.Required" disabled="@_isDerivedField"
                                @onchange="e => OnDraftChangedAsync(f => f with { Required = (bool)(e.Value ?? false) })" />
                     </div>
                 </div>
@@ -177,6 +194,7 @@
                     <div class="ide-dict__field">
                         <label for="ide-dict-picture">Picture (armazenamento/exibição)</label>
                         <input id="ide-dict-picture" class="ide-dict__input" placeholder="@@s50" value="@draft.Picture"
+                               disabled="@_isDerivedField"
                                @oninput="e => OnDraftChangedAsync(f => f with { Picture = e.Value?.ToString() })" />
                         @if (_errors.Picture is not null)
                         {
@@ -197,6 +215,7 @@
                     <div class="ide-dict__field">
                         <label for="ide-dict-external">Nome externo (SQL)</label>
                         <input id="ide-dict-external" class="ide-dict__input" placeholder="@(draft.Name)"
+                               disabled="@_isDerivedField"
                                value="@draft.ExternalName"
                                @oninput="e => OnDraftChangedAsync(f => f with { ExternalName = e.Value?.ToString() })" />
                         <span class="ide-dict__hint">Nome físico da coluna no banco, quando diferente do nome C#.</span>
@@ -204,6 +223,7 @@
                     <div class="ide-dict__field">
                         <label for="ide-dict-dbtype">Tipo no banco</label>
                         <input id="ide-dict-dbtype" class="ide-dict__input" value="@draft.DbType"
+                               disabled="@_isDerivedField"
                                @oninput="e => OnDraftChangedAsync(f => f with { DbType = e.Value?.ToString() ?? f.DbType })" />
                         <span class="ide-dict__hint">
                             Sugestão para @draft.ClrType: <b>@FieldRules.SuggestDbType(draft.ClrType)</b>.
@@ -212,7 +232,7 @@
                     <div class="ide-dict__field ide-dict__field--inline">
                         <label for="ide-dict-precision">Precisão (decimais)</label>
                         <input id="ide-dict-precision" class="ide-dict__input ide-dict__input--num" inputmode="numeric"
-                               value="@(draft.Precision?.ToString() ?? string.Empty)" disabled="@(!FieldRules.TypeAcceptsPrecision(draft.ClrType))"
+                               value="@(draft.Precision?.ToString() ?? string.Empty)" disabled="@(!FieldRules.TypeAcceptsPrecision(draft.ClrType) || _isDerivedField)"
                                @oninput="e => OnDraftChangedAsync(f => f with { Precision = FieldRules.ParseOptionalInt(e.Value?.ToString()) })" />
                         @if (_errors.Precision is not null)
                         {
@@ -222,14 +242,18 @@
                     <div class="ide-dict__field">
                         <label for="ide-dict-default">Valor padrão</label>
                         <input id="ide-dict-default" class="ide-dict__input" value="@draft.Default"
+                               disabled="@_isDerivedField"
                                @oninput="e => OnDraftChangedAsync(f => f with { Default = e.Value?.ToString() })" />
                     </div>
                 </div>
             }
 
             <div class="ide-dict__actions">
-                <XFButton Text="Aplicar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
-                          OnClick="ApplyAsync" />
+                @if (!_isDerivedField)
+                {
+                    <XFButton Text="Aplicar" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                              OnClick="ApplyAsync" />
+                }
                 <XFButton Text="Descartar" Variant="XFButtonVariant.Soft" Color="XFButtonColor.Secondary" Size="XFExtendedSize.Sm"
                           OnClick="DiscardAsync" />
                 @if (!FieldRules.IsSystemField(draft.Name))
@@ -247,6 +271,13 @@
        Title="Adicionar coluna" Description="O tipo no banco é sugerido a partir do tipo C#."
        ConfirmText="Adicionar" ConfirmAction="AddFieldAsync">
     <div class="grid gap-4 md:grid-cols-2">
+        @if (GlobalFields.Count > 0)
+        {
+            <XFCombobox TItem="string" TValue="string" Label="Derivar de (opcional)" Placeholder="Coluna global"
+                        Items="@GlobalFields.Select(g => g.Name)" TextSelector="@(t => t)" ValueSelector="@(t => t)"
+                        Value="@(_newDerivedFrom is Guid did ? GlobalFields.First(g => g.Id == did).Name : null)"
+                        ValueChanged="OnDerivedFromChanged" />
+        }
         <XFTextInput Label="Nome *" Placeholder="Descricao"
                      Value="@_newName" ValueChanged="(string v) => _newName = v ?? string.Empty" />
         <XFCombobox TItem="string" TValue="string" Label="Tipo *" Placeholder="Selecione"
@@ -303,6 +334,13 @@
     /// <summary>Notifica o pai quando a aba muda (grava na URL).</summary>
     [Parameter] public EventCallback<int> TabIndexChanged { get; set; }
 
+    /// <summary>
+    /// Colunas globais do dicionário (≈ "Derived From"): modelos que podem ser
+    /// derivados ao adicionar uma coluna.
+    /// </summary>
+    [Parameter] public IReadOnlyList<XForge.Ide.Application.Dto.GlobalFieldDto> GlobalFields { get; set; }
+        = Array.Empty<XForge.Ide.Application.Dto.GlobalFieldDto>();
+
     private EntityDto? _currentEntity;
     private EntityFieldDto? _draft;
     private EntityFieldDto? _persisted;
@@ -315,6 +353,12 @@
 
     private bool _isSystemField => _draft is not null && FieldRules.IsSystemField(_draft.Name);
 
+    /// <summary>
+    /// Coluna derivada de um modelo global (≈ Derived From). O nome não é editável
+    /// aqui: a próxima propagação do modelo o sobrescreveria.
+    /// </summary>
+    private bool _isDerivedField => _draft?.DerivedFromName is not null;
+
     // rascunho de nova coluna
     private bool _showFieldModal;
     private string _newName = string.Empty;
@@ -323,6 +367,7 @@
     private string? _newPicture;
     private bool _newRequired;
     private string? _modalError;
+    private Guid? _newDerivedFrom;
 
     // confirmação de exclusão
     private bool _showDeleteConfirm;
@@ -431,6 +476,15 @@
         {
             return;
         }
+        if (_isDerivedField)
+        {
+            // a coluna pertence ao modelo: salvar aqui seria sobrescrito na
+            // próxima propagação — a edição honesta é no modelo
+            _message = $"Coluna derivada de '{_draft.DerivedFromName}': altere a coluna global para propagar.";
+            _error = true;
+            StateHasChanged();
+            return;
+        }
         var draft = _draft;
         var siblings = _currentEntity.Fields.Where(f => f.Id != draft.Id).Select(f => f.Name);
 
@@ -487,8 +541,26 @@
         _newPicture = null;
         _newRequired = false;
         _modalError = null;
+        _newDerivedFrom = null;
         _showFieldModal = true;
         return Task.CompletedTask;
+    }
+
+    /// <summary>Escolheu um modelo no "Derivar de": preenche o formulário (o serviço reaplica o modelo).</summary>
+    private void OnDerivedFromChanged(string? name)
+    {
+        var template = GlobalFields.FirstOrDefault(g => g.Name == name);
+        if (template is null)
+        {
+            _newDerivedFrom = null;
+            return;
+        }
+        _newDerivedFrom = template.Id;
+        _newName = template.Name;
+        _newClrType = template.ClrType;
+        _newLabel = template.Label;
+        _newPicture = template.Picture;
+        _newRequired = template.Required;
     }
 
     private Task OnFieldModalChanged(bool open)
@@ -521,7 +593,10 @@
         var result = await Dictionaries.AddFieldAsync(new(
             _currentEntity.Id, name, _newClrType, dbType,
             FieldRules.TypeAcceptsLength(_newClrType) ? FieldRules.DefaultStringLength : null,
-            null, _newRequired, null, _newPicture, _newLabel, null));
+            null, _newRequired, null, _newPicture, _newLabel, null)
+        {
+            DerivedFromId = _newDerivedFrom
+        });
 
         if (result.IsSuccess)
         {

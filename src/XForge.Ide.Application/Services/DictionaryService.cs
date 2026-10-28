@@ -29,7 +29,7 @@ public class DictionaryService
     public async Task<Dto.EntityDto?> GetEntityAsync(Guid entityId, CancellationToken ct = default)
     {
         var entity = await _dictionaries.GetEntityAsync(entityId, ct);
-        return entity is null ? null : Dto.EntityDto.From(entity);
+        return entity is null ? null : await WithDerivedNamesAsync(Dto.EntityDto.From(entity), ct);
     }
 
     public async Task<IReadOnlyList<Dto.EntityDto>> ListEntitiesAsync(Guid dictionaryId, CancellationToken ct = default)
@@ -133,7 +133,7 @@ public class DictionaryService
         });
 
         await _dictionaries.AddEntityAsync(entity, ct);
-        return Result<Dto.EntityDto>.Success(Dto.EntityDto.From(entity));
+        return Result<Dto.EntityDto>.Success(await WithDerivedNamesAsync(Dto.EntityDto.From(entity), ct));
     }
 
     public async Task<Result<Dto.EntityDto>> UpdateEntityAsync(Dto.UpdateEntityRequest request, CancellationToken ct = default)
@@ -149,13 +149,170 @@ public class DictionaryService
         entity.ExternalName = string.IsNullOrWhiteSpace(request.ExternalName) ? null : request.ExternalName.Trim();
 
         await _dictionaries.UpdateEntityAsync(entity, ct);
-        return Result<Dto.EntityDto>.Success(Dto.EntityDto.From(entity));
+        return Result<Dto.EntityDto>.Success(await WithDerivedNamesAsync(Dto.EntityDto.From(entity), ct));
     }
 
     public async Task<Result> DeleteEntityAsync(Guid entityId, CancellationToken ct = default)
     {
         await _dictionaries.DeleteEntityAsync(entityId, ct);
         return Result.Success();
+    }
+
+    // -------------------------------------------------- colunas globais (Derived From)
+
+    public async Task<IReadOnlyList<Dto.GlobalFieldDto>> ListGlobalFieldsAsync(
+        Guid dictionaryId, CancellationToken ct = default)
+    {
+        var items = await _dictionaries.ListGlobalFieldsAsync(dictionaryId, ct);
+        return items.Select(Dto.GlobalFieldDto.From).ToList();
+    }
+
+    public async Task<Result<Dto.GlobalFieldDto>> AddGlobalFieldAsync(
+        Dto.CreateGlobalFieldRequest request, CancellationToken ct = default)
+    {
+        var dictionary = await _dictionaries.GetFullAsync(request.DictionaryId, ct);
+        if (dictionary is null)
+            return Result<Dto.GlobalFieldDto>.Failure("Dicionário não encontrado.");
+
+        var name = request.Name?.Trim() ?? string.Empty;
+        if (name.Length == 0)
+            return Result<Dto.GlobalFieldDto>.Failure("Nome da coluna global é obrigatório.");
+
+        var existentes = await _dictionaries.ListGlobalFieldsAsync(request.DictionaryId, ct);
+        if (existentes.Any(g => g.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return Result<Dto.GlobalFieldDto>.Failure($"Já existe a coluna global '{name}' neste dicionário.");
+
+        if (!KnownClrTypes.Contains(request.ClrType))
+            return Result<Dto.GlobalFieldDto>.Failure(
+                $"Tipo CLR '{request.ClrType}' não suportado. Use: {string.Join(", ", KnownClrTypes)}.");
+
+        var template = new GlobalField
+        {
+            DictionaryId = request.DictionaryId,
+            Name = name,
+            ClrType = request.ClrType,
+            Length = request.Length,
+            Picture = string.IsNullOrWhiteSpace(request.Picture) ? null : request.Picture.Trim(),
+            Label = string.IsNullOrWhiteSpace(request.Label) ? null : request.Label.Trim(),
+            Default = string.IsNullOrWhiteSpace(request.Default) ? null : request.Default.Trim(),
+            Required = request.Required,
+            Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+        };
+
+        await _dictionaries.AddGlobalFieldAsync(template, ct);
+        return Result<Dto.GlobalFieldDto>.Success(Dto.GlobalFieldDto.From(template));
+    }
+
+    /// <summary>
+    /// Atualiza o modelo e PROPAGA para todos os campos derivados dele
+    /// (≈ alterar uma coluna global no DCT do Clarion).
+    /// </summary>
+    public async Task<Result<Dto.GlobalFieldDto>> UpdateGlobalFieldAsync(
+        Dto.UpdateGlobalFieldRequest request, CancellationToken ct = default)
+    {
+        var template = await _dictionaries.GetGlobalFieldAsync(request.GlobalFieldId, ct);
+        if (template is null)
+            return Result<Dto.GlobalFieldDto>.Failure("Coluna global não encontrada.");
+
+        var name = request.Name?.Trim() ?? string.Empty;
+        if (name.Length == 0)
+            return Result<Dto.GlobalFieldDto>.Failure("Nome da coluna global é obrigatório.");
+
+        var existentes = await _dictionaries.ListGlobalFieldsAsync(template.DictionaryId, ct);
+        if (existentes.Any(g => g.Id != template.Id && g.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return Result<Dto.GlobalFieldDto>.Failure($"Já existe a coluna global '{name}' neste dicionário.");
+
+        template.Name = name;
+        template.ClrType = request.ClrType;
+        template.Length = request.Length;
+        template.Picture = string.IsNullOrWhiteSpace(request.Picture) ? null : request.Picture.Trim();
+        template.Label = string.IsNullOrWhiteSpace(request.Label) ? null : request.Label.Trim();
+        template.Default = string.IsNullOrWhiteSpace(request.Default) ? null : request.Default.Trim();
+        template.Required = request.Required;
+        template.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+        await _dictionaries.UpdateGlobalFieldAsync(template, ct);
+
+        await PropagateAsync(template, ct);
+        return Result<Dto.GlobalFieldDto>.Success(Dto.GlobalFieldDto.From(template));
+    }
+
+    public async Task<Result> DeleteGlobalFieldAsync(Guid globalFieldId, CancellationToken ct = default)
+    {
+        var template = await _dictionaries.GetGlobalFieldAsync(globalFieldId, ct);
+        if (template is null)
+            return Result.Failure("Coluna global não encontrada.");
+
+        // os campos derivados permanecem (desvinculados)
+        await _dictionaries.DeleteGlobalFieldAsync(globalFieldId, ct);
+        return Result.Success();
+    }
+
+    /// <summary>Copia as propriedades do modelo para todos os campos derivados.</summary>
+    private async Task PropagateAsync(GlobalField template, CancellationToken ct)
+    {
+        var dictionary = await _dictionaries.GetFullAsync(template.DictionaryId, ct);
+        if (dictionary is null)
+        {
+            return;
+        }
+
+        // campo a campo (UpdateFieldAsync reanexa só o campo; reanexar o grafo
+        // inteiro colidiria com instâncias já rastreadas pelo contexto)
+        foreach (var f in dictionary.Entities.SelectMany(e => e.Fields).Where(f => f.DerivedFromId == template.Id))
+        {
+            f.Name = template.Name;
+            f.ClrType = template.ClrType;
+            f.DbType = DefaultDbType(template.ClrType);
+            f.Length = template.Length;
+            f.Required = template.Required;
+            f.Default = template.Default;
+            f.Picture = template.Picture;
+            f.Label = template.Label ?? template.Name;
+            await _dictionaries.UpdateFieldAsync(f, ct);
+        }
+    }
+
+    /// <summary>Preenche o nome do modelo em cada campo derivado (para a UI).</summary>
+    private async Task<Dto.EntityDto> WithDerivedNamesAsync(Dto.EntityDto dto, CancellationToken ct)
+    {
+        var ids = dto.Fields
+            .Where(f => f.DerivedFromId is not null)
+            .Select(f => f.DerivedFromId!.Value)
+            .Distinct()
+            .ToList();
+        if (ids.Count == 0)
+        {
+            return dto;
+        }
+
+        var modelos = await _dictionaries.ListGlobalFieldsByIdsAsync(ids, ct);
+        if (modelos.Count == 0)
+        {
+            return dto;
+        }
+
+        var porId = modelos.ToDictionary(g => g.Id);
+        var campos = dto.Fields
+            .Select(f => f with
+            {
+                DerivedFromName = f.DerivedFromId is Guid id && porId.TryGetValue(id, out var g)
+                    ? g.Name
+                    : null,
+            })
+            .ToList();
+        return dto with { Fields = campos };
+    }
+
+    /// <summary>Versão para um campo só (retornos de Add/Update).</summary>
+    private async Task<Dto.EntityFieldDto> WithDerivedNameAsync(Dto.EntityFieldDto dto, CancellationToken ct)
+    {
+        if (dto.DerivedFromId is not Guid id)
+        {
+            return dto;
+        }
+
+        var modelo = await _dictionaries.GetGlobalFieldAsync(id, ct);
+        return modelo is null ? dto : dto with { DerivedFromName = modelo.Name };
     }
 
     // ------------------------------------------------------------------ Campos
@@ -177,6 +334,31 @@ public class DictionaryService
             return Result<Dto.EntityFieldDto>.Failure(
                 $"Tipo CLR '{request.ClrType}' não suportado. Use: {string.Join(", ", KnownClrTypes)}.");
 
+        // ≈ Derived From: o modelo de coluna global preenche o campo novo
+        Guid? derivedFrom = null;
+        if (request.DerivedFromId is Guid templateId)
+        {
+            var template = await _dictionaries.GetGlobalFieldAsync(templateId, ct);
+            if (template is null || template.DictionaryId != entity.DictionaryId)
+                return Result<Dto.EntityFieldDto>.Failure("Modelo de coluna global não encontrado neste dicionário.");
+            derivedFrom = template.Id;
+            name = template.Name;
+            if (entity.Fields.Any(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                return Result<Dto.EntityFieldDto>.Failure($"Campo '{name}' já existe na entidade {entity.Name}.");
+
+            request = request with
+            {
+                Name = name,
+                ClrType = template.ClrType,
+                Length = template.Length,
+                DbType = DefaultDbType(template.ClrType),
+                Required = template.Required,
+                Default = template.Default,
+                Picture = template.Picture,
+                Label = template.Label ?? name,
+            };
+        }
+
         var field = new EntityField
         {
             EntityId = entity.Id,
@@ -191,10 +373,12 @@ public class DictionaryService
             Label = string.IsNullOrWhiteSpace(request.Label) ? name : request.Label.Trim(),
             ExternalName = string.IsNullOrWhiteSpace(request.ExternalName) ? null : request.ExternalName.Trim(),
             SortOrder = entity.Fields.Count,
+            DerivedFromId = derivedFrom,
         };
 
         await _dictionaries.AddFieldAsync(field, ct);
-        return Result<Dto.EntityFieldDto>.Success(Dto.EntityFieldDto.From(field));
+        return Result<Dto.EntityFieldDto>.Success(
+            await WithDerivedNameAsync(Dto.EntityFieldDto.From(field), ct));
     }
 
     public async Task<Result<Dto.EntityFieldDto>> UpdateFieldAsync(Dto.UpdateFieldRequest request, CancellationToken ct = default)
@@ -218,7 +402,8 @@ public class DictionaryService
         field.ExternalName = string.IsNullOrWhiteSpace(request.ExternalName) ? null : request.ExternalName.Trim();
 
         await _dictionaries.UpdateFieldAsync(field, ct);
-        return Result<Dto.EntityFieldDto>.Success(Dto.EntityFieldDto.From(field));
+        return Result<Dto.EntityFieldDto>.Success(
+            await WithDerivedNameAsync(Dto.EntityFieldDto.From(field), ct));
     }
 
     public async Task<Result> DeleteFieldAsync(Guid fieldId, CancellationToken ct = default)

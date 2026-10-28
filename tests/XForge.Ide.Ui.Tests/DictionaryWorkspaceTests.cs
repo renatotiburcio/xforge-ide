@@ -1,6 +1,7 @@
 using Bunit;
 using FluentAssertions;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using XForge.Ide.App.Components;
 using XForge.Ide.Application.Dto;
@@ -117,6 +118,58 @@ public class DictionaryWorkspaceTests : BunitTestBase
         cut.Find(".ide-dict__props").TextContent.Should().Contain("Selecione uma coluna");
     }
 
+    [Fact]
+    public void Modal_de_adicionar_coluna_oferece_derivar_da_coluna_global()
+    {
+        var entity = Entity();
+        var modelo = new GlobalFieldDto(
+            Guid.NewGuid(), Guid.NewGuid(), "NomeCliente", "string", 50, "@s40", "Nome do cliente", null, true, null);
+
+        var cut = Context.Render<DictionaryWorkspace>(parameters => parameters
+            .Add(p => p.Entity, entity)
+            .Add(p => p.Entities, new[] { entity })
+            .Add(p => p.GlobalFields, new[] { modelo }));
+
+        cut.FindAll("button").First(b => b.TextContent.Trim() == "Adicionar coluna").Click();
+
+        // combobox "Derivar de" antes dos campos manuais
+        var combo = cut.FindAll(".xf-combobox")[0];
+        combo.TextContent.Should().Contain("Derivar de (opcional)");
+
+        // focar abre a lista (OpenOnFocus) e o modelo aparece como opção
+        cut.Find(".xf-combobox input").TriggerEvent("onfocus", new FocusEventArgs());
+        cut.FindAll("button[role=option]").Should().Contain(o => o.TextContent.Trim() == "NomeCliente");
+    }
+
+    [Fact]
+    public void Coluna_derivada_fica_protegida_no_Property_Sheet()
+    {
+        var entity = Entity();
+        var derivada = entity.Fields[0] with
+        {
+            DerivedFromId = Guid.NewGuid(),
+            DerivedFromName = "NomeCliente",
+        };
+        var comDerivada = entity with
+        {
+            Fields = new[] { derivada, entity.Fields[1] },
+        };
+
+        var cut = Context.Render<DictionaryWorkspace>(parameters => parameters
+            .Add(p => p.Entity, comDerivada)
+            .Add(p => p.Entities, new[] { comDerivada })
+            .Add(p => p.FieldId, derivada.Id));
+
+        // seleção restaurada + marcação visual
+        cut.Find(".ide-dict__row--active").TextContent.Should().Contain("Nome");
+        cut.Find(".ide-dict__props-head").TextContent.Should().Contain("derivada");
+
+        // nome não editável e "Aplicar" ausente: a edição honesta é no modelo
+        cut.Find("#ide-dict-name").HasAttribute("disabled").Should().BeTrue();
+        cut.FindAll("button").Should().NotContain(b => b.TextContent.Trim() == "Aplicar");
+        cut.Find(".ide-dict__hint").TextContent.Should().Contain("NomeCliente");
+    }
+
     /// <summary>Repositório sem banco: os caminhos exercitados não persistem.</summary>
     private sealed class StubDictionaryRepository : IDictionaryRepository
     {
@@ -145,5 +198,15 @@ public class DictionaryWorkspaceTests : BunitTestBase
             => Task.FromResult<IReadOnlyList<EntityRelation>>(Array.Empty<EntityRelation>());
         public Task AddRelationAsync(EntityRelation relation, CancellationToken ct = default) => Task.CompletedTask;
         public Task DeleteRelationAsync(Guid relationId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<GlobalField>> ListGlobalFieldsAsync(Guid dictionaryId, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<GlobalField>>(Array.Empty<GlobalField>());
+        public Task<IReadOnlyList<GlobalField>> ListGlobalFieldsByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<GlobalField>>(Array.Empty<GlobalField>());
+        public Task<GlobalField?> GetGlobalFieldAsync(Guid id, CancellationToken ct = default)
+            => Task.FromResult<GlobalField?>(null);
+        public Task AddGlobalFieldAsync(GlobalField field, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateGlobalFieldAsync(GlobalField field, CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeleteGlobalFieldAsync(Guid id, CancellationToken ct = default) => Task.CompletedTask;
     }
 }

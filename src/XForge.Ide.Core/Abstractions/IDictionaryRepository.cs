@@ -43,4 +43,15 @@ public interface IDictionaryRepository
 
     Task AddRelationAsync(EntityRelation relation, CancellationToken ct = default);
     Task DeleteRelationAsync(Guid relationId, CancellationToken ct = default);
+
+    // -------------------------------------------------------- colunas globais
+
+    Task<IReadOnlyList<GlobalField>> ListGlobalFieldsAsync(Guid dictionaryId, CancellationToken ct = default);
+    Task<IReadOnlyList<GlobalField>> ListGlobalFieldsByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default);
+    Task<GlobalField?> GetGlobalFieldAsync(Guid id, CancellationToken ct = default);
+    Task AddGlobalFieldAsync(GlobalField field, CancellationToken ct = default);
+    Task UpdateGlobalFieldAsync(GlobalField field, CancellationToken ct = default);
+
+    /// <summary>Remove o modelo e desvincula os campos derivados (eles permanecem).</summary>
+    Task DeleteGlobalFieldAsync(Guid id, CancellationToken ct = default);
 }

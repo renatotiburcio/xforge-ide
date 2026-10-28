@@ -105,6 +105,12 @@ public class DictionaryRepository : IDictionaryRepository
     {
         if (_db.Entry(field).State == EntityState.Detached)
         {
+            // desanexa instância rastreada com a mesma chave (o DbContext do
+            // circuito Blazor sobrevive entre operações)
+            var rastreado = _db.ChangeTracker.Entries<EntityField>()
+                .FirstOrDefault(e => e.Entity.Id == field.Id);
+            rastreado?.State = EntityState.Detached;
+
             _db.EntityFields.Update(field);
         }
         await _db.SaveChangesAsync(ct);
@@ -157,5 +163,62 @@ public class DictionaryRepository : IDictionaryRepository
     public async Task DeleteRelationAsync(Guid relationId, CancellationToken ct = default)
     {
         await _db.EntityRelations.Where(r => r.Id == relationId).ExecuteDeleteAsync(ct);
+    }
+
+    // -------------------------------------------------------- colunas globais
+
+    public async Task<IReadOnlyList<GlobalField>> ListGlobalFieldsAsync(Guid dictionaryId, CancellationToken ct = default)
+        => await _db.GlobalFields
+            .Where(g => g.DictionaryId == dictionaryId)
+            .OrderBy(g => g.Name)
+            .ToListAsync(ct);
+
+    public Task<GlobalField?> GetGlobalFieldAsync(Guid id, CancellationToken ct = default)
+        => _db.GlobalFields.FirstOrDefaultAsync(g => g.Id == id, ct);
+
+    public async Task<IReadOnlyList<GlobalField>> ListGlobalFieldsByIdsAsync(
+        IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+    {
+        if (ids.Count == 0)
+        {
+            return Array.Empty<GlobalField>();
+        }
+        return await _db.GlobalFields
+            .AsNoTracking()
+            .Where(g => ids.Contains(g.Id))
+            .ToListAsync(ct);
+    }
+
+    public async Task AddGlobalFieldAsync(GlobalField field, CancellationToken ct = default)
+    {
+        _db.GlobalFields.Add(field);
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateGlobalFieldAsync(GlobalField field, CancellationToken ct = default)
+    {
+        if (_db.Entry(field).State == EntityState.Detached)
+        {
+            _db.GlobalFields.Update(field);
+        }
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task DeleteGlobalFieldAsync(Guid id, CancellationToken ct = default)
+    {
+        // desvincula os campos derivados ANTES de remover o modelo (eles permanecem)
+        var dependentes = await _db.EntityFields
+            .Where(f => f.DerivedFromId == id)
+            .ToListAsync(ct);
+        foreach (var f in dependentes)
+        {
+            f.DerivedFromId = null;
+        }
+        var modelo = await _db.GlobalFields.FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (modelo is not null)
+        {
+            _db.GlobalFields.Remove(modelo);
+        }
+        await _db.SaveChangesAsync(ct);
     }
 }

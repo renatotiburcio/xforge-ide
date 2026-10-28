@@ -264,6 +264,9 @@ namespace XForge.Ide.Infrastructure.Migrations
                     b.Property<string>("Default")
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("DerivedFromId")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid>("EntityId")
                         .HasColumnType("TEXT");
 
@@ -426,6 +429,50 @@ namespace XForge.Ide.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("GitSettings");
+                });
+
+            modelBuilder.Entity("XForge.Ide.Core.Entities.GlobalField", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClrType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Default")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DictionaryId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Label")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("Length")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Picture")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Required")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DictionaryId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("GlobalFields");
                 });
 
             modelBuilder.Entity("XForge.Ide.Core.Entities.IdeDictionary", b =>

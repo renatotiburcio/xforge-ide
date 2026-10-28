@@ -28,6 +28,7 @@ public class IdeDbContext : DbContext
     public DbSet<McpToolLog> McpToolLogs => Set<McpToolLog>();
     public DbSet<UiSnapshot> UiSnapshots => Set<UiSnapshot>();
     public DbSet<EditorDraft> EditorDrafts => Set<EditorDraft>();
+    public DbSet<GlobalField> GlobalFields => Set<GlobalField>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -159,6 +160,20 @@ public class IdeDbContext : DbContext
             e.HasKey(x => x.Path);
             e.Property(x => x.Path).IsRequired().HasMaxLength(1000);
             // Content sem limite: arquivos de código podem ser grandes
+        });
+
+        b.Entity<GlobalField>(e =>
+        {
+            // coluna global (modelo de derivação ≈ Derived From do DCT)
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).IsRequired().HasMaxLength(200);
+            e.HasIndex(x => new { x.DictionaryId, x.Name }).IsUnique();
+        });
+
+        // DerivedFromId não tem FK: excluir o modelo apenas DESVINCULA os campos
+        b.Entity<Entity>(e =>
+        {
+            e.HasMany(x => x.Fields).WithOne().HasForeignKey(x => x.EntityId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
