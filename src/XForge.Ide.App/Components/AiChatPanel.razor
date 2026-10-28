@@ -5,7 +5,8 @@
 @inject AiSettingsStore AiSettings
 @inject IdeOutputService Output
 @inject IdeUiState Ui
-@implements IDisposable
+@inject UiStatePersistor Snapshots
+@implements IAsyncDisposable
 
 <div class="ide-panel__head">
     <XFTypography Variant="XFTypographyVariant.Body2" Weight="XFTypographyWeight.Semibold">Assistente IA</XFTypography>
@@ -140,7 +141,46 @@
     private string? _activeFile;
     private int _selectionLength;
 
-    protected override void OnInitialized() => Output.Changed += OnOutputChanged;
+    protected override async Task OnInitializedAsync()
+    {
+        Output.Changed += OnOutputChanged;
+        await RestoreChatAsync();
+    }
+
+    /// <summary>Devolve a conversa do projeto (o F5 não perde o histórico do chat).</summary>
+    private async Task RestoreChatAsync()
+    {
+        // o shell restaura o projeto no primeiro render do painel — espera chegar
+        for (var tentativa = 0; tentativa < 20 && Ui.CurrentProject is null; tentativa++)
+        {
+            await Task.Delay(100);
+        }
+
+        if (Ui.CurrentProject is null)
+        {
+            return;
+        }
+
+        var snapshot = await Snapshots.RestoreAsync<ChatSnapshot>("/ai", Ui.CurrentProject.Id);
+        if (snapshot?.Messages is not { Count: > 0 })
+        {
+            return;
+        }
+
+        _messages.Clear();
+        _messages.AddRange(snapshot.Messages.Select(m => (m.Role, m.Content)));
+        StateHasChanged();
+    }
+
+    private void SaveChatSnapshot()
+    {
+        if (Ui.CurrentProject is null)
+        {
+            return;
+        }
+        var mensagens = _messages.Select(m => new ChatMessageRecord(m.Role, m.Content)).ToList();
+        Snapshots.Save("/ai", Ui.CurrentProject.Id, new ChatSnapshot(mensagens));
+    }
 
     protected override void OnParametersSet()
     {
@@ -165,6 +205,7 @@
 
         var question = prompt ?? AiAction.Label(action);
         _messages.Add(("user", question));
+        SaveChatSnapshot(); // a pergunta já sobrevive a um F5 mesmo se a resposta falhar
         try
         {
             var context = await ContextBuilder.BuildAsync(
@@ -187,6 +228,7 @@
         {
             _busy = false;
             _prompt = string.Empty;
+            SaveChatSnapshot();
             StateHasChanged();
         }
     }
@@ -208,11 +250,16 @@
         _showClearConfirm = false;
         _messages.Clear();
         _error = null;
+        SaveChatSnapshot(); // limpar também apaga o histórico persistido
         StateHasChanged();
         await Task.CompletedTask;
     }
 
-    public void Dispose() => Output.Changed -= OnOutputChanged;
+    public async ValueTask DisposeAsync()
+    {
+        Output.Changed -= OnOutputChanged;
+        await Snapshots.FlushAsync();
+    }
 
     /// <summary>Renderiza código em blocos, listas e negrito de forma mínima e segura.</summary>
     private static string RenderMarkdown(string text)

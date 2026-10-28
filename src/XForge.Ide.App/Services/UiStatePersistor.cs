@@ -193,3 +193,12 @@ public sealed record SearchFilterSnapshot(
 
 /// <summary>Diagrama ER: dicionário selecionado (o zoom/pan faz auto-fit ao abrir).</summary>
 public sealed record ErDiagramSnapshot(Guid? DictionaryId);
+
+/// <summary>Uma mensagem do chat IA (papel + conteúdo).</summary>
+public sealed record ChatMessageRecord(string Role, string Content);
+
+/// <summary>
+/// Conversa do chat IA por projeto. Teto de 16 KB: conversas muito longas
+/// acima disso são podadas (aviso do persistor) em vez de gravar parcial.
+/// </summary>
+public sealed record ChatSnapshot(IReadOnlyList<ChatMessageRecord> Messages);
