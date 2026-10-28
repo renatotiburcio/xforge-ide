@@ -114,6 +114,32 @@ public class GlobalFieldTests : ServiceTestBase
     }
 
     [Fact]
+    public async Task Propagacao_alcanca_todas_as_tabelas_que_derivaram()
+    {
+        var (dictId, entityId) = await CriarDicionarioAsync();
+        var segunda = await Dictionaries.AddEntityAsync(new CreateEntityRequest(
+            dictId, "Pedido", "Pedidos", "Sqlite", null, null));
+        var modelo = await Dictionaries.AddGlobalFieldAsync(Modelo(dictId));
+        var derivar = new CreateFieldRequest(
+            Guid.Empty, "x", "string", null, null, null, false, null, null, null, null)
+        {
+            DerivedFromId = modelo.Value.Id
+        };
+        await Dictionaries.AddFieldAsync(derivar with { EntityId = entityId });
+        await Dictionaries.AddFieldAsync(derivar with { EntityId = segunda.Value.Id });
+
+        var atualizado = await Dictionaries.UpdateGlobalFieldAsync(new UpdateGlobalFieldRequest(
+            modelo.Value.Id, "NomeCompleto", "string", 80, null, null, null, false, null));
+
+        atualizado.IsSuccess.Should().BeTrue();
+        foreach (var id in new[] { entityId, segunda.Value.Id })
+        {
+            var entidade = await Dictionaries.GetEntityAsync(id);
+            entidade!.Fields.Should().Contain(f => f.Name == "NomeCompleto" && f.Length == 80);
+        }
+    }
+
+    [Fact]
     public async Task DTO_do_campo_derivado_traz_o_nome_do_modelo()
     {
         var (dictId, entityId) = await CriarDicionarioAsync();
