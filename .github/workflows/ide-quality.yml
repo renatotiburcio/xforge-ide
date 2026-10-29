@@ -2,7 +2,7 @@ name: IDE Qualidade
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, ci/tsk-702-database-integration]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -57,3 +57,55 @@ jobs:
           path: qa-report.json
           if-no-files-found: warn
           retention-days: 7
+
+  visual-query-database-integration:
+    name: SQL gerado nos bancos reais
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: xforge_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: xforge_test
+          MYSQL_ROOT_PASSWORD: Xforge!Integration2026
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -p'Xforge!Integration2026'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 15
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Xforge!Integration2026
+        ports:
+          - 1433:1433
+    env:
+      XFORGE_TEST_POSTGRESQL: Host=127.0.0.1;Port=5432;Username=postgres;Password=postgres;Database=xforge_test;Pooling=false
+      XFORGE_TEST_MYSQL: Server=127.0.0.1;Port=3306;User ID=root;Password=Xforge!Integration2026;Database=xforge_test;Pooling=false
+      XFORGE_TEST_SQLSERVER: Server=127.0.0.1,1433;User ID=sa;Password=Xforge!Integration2026;Initial Catalog=master;Encrypt=False;TrustServerCertificate=True;Connect Timeout=10;Pooling=false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Executar consultas geradas nos três bancos
+        run: dotnet test tests/XForge.Ide.Core.Tests/XForge.Ide.Core.Tests.csproj -c Release --nologo --filter FullyQualifiedName~VisualQueryDatabaseIntegrationTests
