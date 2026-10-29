@@ -8,6 +8,7 @@ using XForge.Ide.Application.Dto;
 using XForge.Ide.Application.Services;
 using XForge.Ide.Core.Abstractions;
 using XForge.Ide.Core.Entities;
+using XForge.Ide.Core.Enums;
 using Xunit;
 
 namespace XForge.Ide.Ui.Tests;
@@ -18,11 +19,18 @@ namespace XForge.Ide.Ui.Tests;
 /// </summary>
 public class DictionaryWorkspaceTests : BunitTestBase
 {
+    private readonly StubDictionaryRepository _repo;
+
     public DictionaryWorkspaceTests()
     {
         // os testes exercitam só render/clique — nada de banco
-        Context.Services.AddSingleton(new DictionaryService(new StubDictionaryRepository()));
+        _repo = new StubDictionaryRepository();
+        Context.Services.AddSingleton(new DictionaryService(_repo));
     }
+
+    /// <summary>Campo devolvido pelo stub quando o serviço precisa recarregar (salvar validação).</summary>
+    protected EntityField StubField(Guid entityId, Guid fieldId, string name = "Status")
+        => _repo.SetField(entityId, fieldId, name);
 
     private static EntityDto Entity()
     {
@@ -170,16 +178,105 @@ public class DictionaryWorkspaceTests : BunitTestBase
         cut.Find(".ide-dict__hint").TextContent.Should().Contain("NomeCliente");
     }
 
+    [Fact]
+    public void Aba_validade_mostra_a_regra_gravada_no_campo()
+    {
+        var entity = Entity();
+        var comRegra = entity.Fields[0] with
+        {
+            Validation = new FieldValidationDto(
+                Guid.NewGuid(), FieldValidationKind.Choices, "A;Ativo\nI;Inativo", "Escolha um status."),
+        };
+        var entidade = entity with { Fields = new[] { comRegra, entity.Fields[1] } };
+
+        var cut = Context.Render<DictionaryWorkspace>(parameters => parameters
+            .Add(p => p.Entity, entidade)
+            .Add(p => p.Entities, new[] { entidade })
+            .Add(p => p.FieldId, comRegra.Id));
+
+        // a linha da coluna e a aba anunciam a regra
+        cut.Find(".ide-dict__row--active").TextContent.Should().Contain("regra");
+        cut.Find("#ide-dict-tab-validity").TextContent.Should().Contain("regra");
+
+        cut.Find("#ide-dict-tab-validity").Click();
+
+        cut.Find("#ide-dict-validity-kind").GetAttribute("value").Should().Be("Choices");
+        cut.Find("#ide-dict-validity-choices").GetAttribute("value").Should().Be("A;Ativo\nI;Inativo");
+        cut.Find("#ide-dict-validity-message").GetAttribute("value").Should().Be("Escolha um status.");
+    }
+
+    [Fact]
+    public async Task Salvar_validade_recusa_faixa_invertida_com_mensagem_acessivel()
+    {
+        var entity = Entity();
+        var campo = StubField(entity.Id, Fields(entity)[0].Id);
+
+        var cut = Context.Render<DictionaryWorkspace>(parameters => parameters
+            .Add(p => p.Entity, entity)
+            .Add(p => p.Entities, new[] { entity }));
+        cut.FindAll(".ide-dict__row")[0].Click();
+        cut.Find("#ide-dict-tab-validity").Click();
+
+        cut.Find("#ide-dict-validity-kind").Change("Range");
+        cut.Find("#ide-dict-validity-min").Input("10");
+        cut.Find("#ide-dict-validity-max").Input("1");
+        cut.FindAll("button").First(b => b.TextContent.Trim() == "Salvar validade").Click();
+
+        var status = cut.Find("#ide-dict-panel-validity [role=status]");
+        status.TextContent.Should().Contain("pode ser maior que"); // "O m?nimo n?o pode ser maior que o m?ximo."
+    }
+
+    [Fact]
+    public async Task Salvar_validade_com_escolhas_validas_confirma_na_regiao_viva()
+    {
+        var entity = Entity();
+        var campo = StubField(entity.Id, Fields(entity)[0].Id);
+
+        var cut = Context.Render<DictionaryWorkspace>(parameters => parameters
+            .Add(p => p.Entity, entity)
+            .Add(p => p.Entities, new[] { entity }));
+        cut.FindAll(".ide-dict__row")[0].Click();
+        cut.Find("#ide-dict-tab-validity").Click();
+
+        cut.Find("#ide-dict-validity-kind").Change("Choices");
+        cut.Find("#ide-dict-validity-choices").Input("A;Ativo\nI;Inativo");
+        cut.FindAll("button").First(b => b.TextContent.Trim() == "Salvar validade").Click();
+
+        var status = cut.Find("#ide-dict-panel-validity [role=status]");
+        status.TextContent.Should().Contain("validade salva"); // "Verifica??o de validade salva."
+        status.GetAttribute("class").Should().NotContain("ide-dict__status--error");
+    }
+
     /// <summary>Repositório sem banco: os caminhos exercitados não persistem.</summary>
     private sealed class StubDictionaryRepository : IDictionaryRepository
     {
+        private EntityField? _campo;
+
+        /// <summary>Registra o campo devolvido por GetFieldAsync (id do parâmetro é ignorado).</summary>
+        public EntityField SetField(Guid entityId, Guid fieldId, string name)
+        {
+            _campo = new EntityField
+            {
+                Id = fieldId,
+                EntityId = entityId,
+                Name = name,
+                ClrType = "string",
+                DbType = "TEXT",
+                Length = 50,
+                Label = name,
+                SortOrder = 0,
+            };
+            return _campo;
+        }
+
         public Task<IReadOnlyList<IdeDictionary>> ListByProjectAsync(Guid projectId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<IdeDictionary>>(Array.Empty<IdeDictionary>());
 
         public Task<IdeDictionary?> GetAsync(Guid id, CancellationToken ct = default) => Task.FromResult<IdeDictionary?>(null);
         public Task<IdeDictionary?> GetFullAsync(Guid id, CancellationToken ct = default) => Task.FromResult<IdeDictionary?>(null);
         public Task<Entity?> GetEntityAsync(Guid entityId, CancellationToken ct = default) => Task.FromResult<Entity?>(null);
-        public Task<EntityField?> GetFieldAsync(Guid fieldId, CancellationToken ct = default) => Task.FromResult<EntityField?>(null);
+        public Task<EntityField?> GetFieldAsync(Guid fieldId, CancellationToken ct = default)
+            => Task.FromResult(_campo is not null && _campo.Id == fieldId ? _campo : null);
         public Task<EntityKey?> GetKeyAsync(Guid keyId, CancellationToken ct = default) => Task.FromResult<EntityKey?>(null);
 
         public Task AddAsync(IdeDictionary dictionary, CancellationToken ct = default) => Task.CompletedTask;
@@ -208,5 +305,11 @@ public class DictionaryWorkspaceTests : BunitTestBase
         public Task AddGlobalFieldAsync(GlobalField field, CancellationToken ct = default) => Task.CompletedTask;
         public Task UpdateGlobalFieldAsync(GlobalField field, CancellationToken ct = default) => Task.CompletedTask;
         public Task DeleteGlobalFieldAsync(Guid id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<FieldValidation?> GetFieldValidationAsync(Guid fieldId, CancellationToken ct = default)
+            => Task.FromResult<FieldValidation?>(null);
+        public Task AddFieldValidationAsync(FieldValidation validation, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateFieldValidationAsync(FieldValidation validation, CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeleteFieldValidationAsync(Guid fieldId, CancellationToken ct = default) => Task.CompletedTask;
     }
 }

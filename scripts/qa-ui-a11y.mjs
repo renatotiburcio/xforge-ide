@@ -132,7 +132,10 @@ const interactions = [
     route: '/code',
     name: 'F5 preserva pastas expandidas do Explorer',
     steps: [
-      { clickFirst: 'button[aria-label="Pasta src"]' },
+      // estado conhecido SEM depender do run anterior: se o snapshot já tiver
+      // deixado a pasta expandida, clicar apenas a colapsaria (interação deixava
+      // de ser idempotente — run ímpar passava, run par falhava).
+      { ensureExpanded: { selector: 'button[aria-label="Pasta src"]' } },
       { expectAttribute: { selector: 'button[aria-label="Pasta src"]', name: 'aria-expanded', value: 'true' } },
       { reload: true },
       { expectAttribute: { selector: 'button[aria-label="Pasta src"]', name: 'aria-expanded', value: 'true' } }
@@ -822,6 +825,26 @@ async function runInteraction(interaction, problems) {
         return;
       }
       await sleep(500);
+    }
+
+    if (step.ensureExpanded) {
+      const { selector, name = 'aria-expanded', value = 'true' } = step.ensureExpanded;
+      const atual = await evaluate(
+        `document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(name)}) ?? null`);
+      if (atual !== value) {
+        const clicou = await clickSelector(selector);
+        if (!clicou) {
+          problems.push(`${interaction.name}: não achou o seletor "${selector}" para expandir. Página: ${await debugPageText()}`);
+          return;
+        }
+        await sleep(500);
+      }
+      const confirmado = await evaluate(
+        `document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(name)}) ?? null`);
+      if (confirmado !== value) {
+        problems.push(`${interaction.name}: "${selector}" não ficou ${name}="${value}" (veio "${confirmado}").`);
+        return;
+      }
     }
 
     if (step.clickFirst) {

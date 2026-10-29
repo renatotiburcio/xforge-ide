@@ -26,6 +26,7 @@ public class DictionaryRepository : IDictionaryRepository
             .AsNoTracking()
             .Include(d => d.Entities)
                 .ThenInclude(e => e.Fields)
+                    .ThenInclude(f => f.Validation)
             .Include(d => d.Entities)
                 .ThenInclude(e => e.Keys)
             .AsSplitQuery()
@@ -35,12 +36,15 @@ public class DictionaryRepository : IDictionaryRepository
         => await _db.Entities
             .AsNoTracking()
             .Include(e => e.Fields)
+                .ThenInclude(f => f.Validation)
             .Include(e => e.Keys)
             .AsSplitQuery()
             .FirstOrDefaultAsync(e => e.Id == entityId, ct);
 
-    public Task<EntityField?> GetFieldAsync(Guid fieldId, CancellationToken ct = default)
-        => _db.EntityFields.FirstOrDefaultAsync(f => f.Id == fieldId, ct);
+    public async Task<EntityField?> GetFieldAsync(Guid fieldId, CancellationToken ct = default)
+        => await _db.EntityFields
+            .Include(f => f.Validation)
+            .FirstOrDefaultAsync(f => f.Id == fieldId, ct);
 
     public Task<EntityKey?> GetKeyAsync(Guid keyId, CancellationToken ct = default)
         => _db.EntityKeys.FirstOrDefaultAsync(k => k.Id == keyId, ct);
@@ -220,5 +224,33 @@ public class DictionaryRepository : IDictionaryRepository
             _db.GlobalFields.Remove(modelo);
         }
         await _db.SaveChangesAsync(ct);
+    }
+
+    // -------------------------------------------------------- verificações de validade
+
+    public Task<FieldValidation?> GetFieldValidationAsync(Guid fieldId, CancellationToken ct = default)
+        => _db.FieldValidations.FirstOrDefaultAsync(v => v.FieldId == fieldId, ct);
+
+    public async Task AddFieldValidationAsync(FieldValidation validation, CancellationToken ct = default)
+    {
+        _db.FieldValidations.Add(validation);
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateFieldValidationAsync(FieldValidation validation, CancellationToken ct = default)
+    {
+        if (_db.Entry(validation).State == EntityState.Detached)
+        {
+            var rastreada = _db.ChangeTracker.Entries<FieldValidation>()
+                .FirstOrDefault(e => e.Entity.Id == validation.Id);
+            rastreada?.State = EntityState.Detached;
+            _db.FieldValidations.Update(validation);
+        }
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task DeleteFieldValidationAsync(Guid fieldId, CancellationToken ct = default)
+    {
+        await _db.FieldValidations.Where(v => v.FieldId == fieldId).ExecuteDeleteAsync(ct);
     }
 }

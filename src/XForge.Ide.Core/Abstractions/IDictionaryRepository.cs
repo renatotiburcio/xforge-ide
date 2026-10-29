@@ -54,4 +54,11 @@ public interface IDictionaryRepository
 
     /// <summary>Remove o modelo e desvincula os campos derivados (eles permanecem).</summary>
     Task DeleteGlobalFieldAsync(Guid id, CancellationToken ct = default);
+
+    // -------------------------------------------------------- verificações de validade
+
+    Task<FieldValidation?> GetFieldValidationAsync(Guid fieldId, CancellationToken ct = default);
+    Task AddFieldValidationAsync(FieldValidation validation, CancellationToken ct = default);
+    Task UpdateFieldValidationAsync(FieldValidation validation, CancellationToken ct = default);
+    Task DeleteFieldValidationAsync(Guid fieldId, CancellationToken ct = default);
 }

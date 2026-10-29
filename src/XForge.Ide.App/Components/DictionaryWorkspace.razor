@@ -1,6 +1,8 @@
 @using XForge.Ide.Application.Dto
 @using XForge.Ide.Application.Services
 @using XForge.Ide.App.Services
+@using XForge.Ide.Core.Enums
+@using System.Globalization
 @using XForge.DesignSystem.Components.Typography
 @using XForge.DesignSystem.Components.Button
 @using XForge.DesignSystem.Components.DataDisplay
@@ -89,6 +91,10 @@
                         {
                             <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="deriv" />
                         }
+                        @if (f.Validation is not null && !f.Validation.IsEmpty)
+                        {
+                            <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Secondary" Text="regra" />
+                        }
                         <span class="ide-dict__row-label">@(f.Label ?? "—")</span>
                     </div>
                 }
@@ -130,6 +136,14 @@
                         class="ide-dict__tab @(_tab == 1 ? "ide-dict__tab--active" : null)" @onclick="() => SetTabAsync(1)">Picture</button>
                 <button role="tab" id="ide-dict-tab-advanced" aria-selected="@(_tab == 2 ? "true" : "false")" aria-controls="ide-dict-panel-advanced"
                         class="ide-dict__tab @(_tab == 2 ? "ide-dict__tab--active" : null)" @onclick="() => SetTabAsync(2)">Avançado</button>
+                <button role="tab" id="ide-dict-tab-validity" aria-selected="@(_tab == 3 ? "true" : "false")" aria-controls="ide-dict-panel-validity"
+                        class="ide-dict__tab @(_tab == 3 ? "ide-dict__tab--active" : null)" @onclick="() => SetTabAsync(3)">
+                    Validade
+                    @if (draft.Validation is not null && !draft.Validation.IsEmpty)
+                    {
+                        <XFBadge Variant="XFBadgeVariant.Soft" Color="XFBadgeColor.Info" Text="regra" />
+                    }
+                </button>
             </div>
 
             @* ------------------------------------------------------------- Geral *@
@@ -244,6 +258,108 @@
                         <input id="ide-dict-default" class="ide-dict__input" value="@draft.Default"
                                disabled="@_isDerivedField"
                                @oninput="e => OnDraftChangedAsync(f => f with { Default = e.Value?.ToString() })" />
+                    </div>
+                </div>
+            }
+
+            @* ------------------------------- Validade (≈ Column Validation do DCT) *@
+            @if (_tab == 3)
+            {
+                <div class="ide-dict__panel" role="tabpanel" id="ide-dict-panel-validity" aria-labelledby="ide-dict-tab-validity">
+                    <div class="ide-dict__field">
+                        <label for="ide-dict-validity-kind">Verificação de validade</label>
+                        <select id="ide-dict-validity-kind" class="ide-dict__input" value="@_validityKind"
+                                @onchange="OnValidityKindChanged">
+                            <option value="None">Nenhuma</option>
+                            <option value="Choices">Lista de escolhas</option>
+                            <option value="Range">Faixa de valores</option>
+                            <option value="MustExistIn">Deve existir em</option>
+                        </select>
+                        <span class="ide-dict__hint">
+                            A regra mora no dicionário e vale para todas as telas geradas a partir dele.
+                        </span>
+                    </div>
+
+                    @if (_validityKind == "Choices")
+                    {
+                        <div class="ide-dict__field">
+                            <label for="ide-dict-validity-choices">Escolhas (uma por linha, "valor;rótulo")</label>
+                            <textarea id="ide-dict-validity-choices" class="ide-dict__input" rows="4"
+                                      placeholder="A;Ativo&#10;I;Inativo&#10;C;Cancelado"
+                                      value="@_validityChoices"
+                                      @oninput="e => _validityChoices = e.Value?.ToString() ?? string.Empty"></textarea>
+                        </div>
+                    }
+                    @if (_validityKind == "Range")
+                    {
+                        <div class="ide-dict__field ide-dict__field--inline">
+                            <label for="ide-dict-validity-min">Mínimo</label>
+                            <input id="ide-dict-validity-min" class="ide-dict__input ide-dict__input--num" inputmode="decimal"
+                                   placeholder="(sem)"
+                                   value="@_validityMin"
+                                   @oninput="e => _validityMin = e.Value?.ToString() ?? string.Empty" />
+                            <label for="ide-dict-validity-max">Máximo</label>
+                            <input id="ide-dict-validity-max" class="ide-dict__input ide-dict__input--num" inputmode="decimal"
+                                   placeholder="(sem)"
+                                   value="@_validityMax"
+                                   @oninput="e => _validityMax = e.Value?.ToString() ?? string.Empty" />
+                        </div>
+                    }
+                    @if (_validityKind == "MustExistIn")
+                    {
+                        @if (ValidityTargets.Count == 0)
+                        {
+                            <span class="ide-dict__hint">
+                                Crie outra tabela no dicionário para usar "Deve existir em".
+                            </span>
+                        }
+                        else
+                        {
+                            <div class="ide-dict__field">
+                                <label for="ide-dict-validity-target-entity">Entidade de referência</label>
+                                <select id="ide-dict-validity-target-entity" class="ide-dict__input" value="@_validityTargetEntity"
+                                        @onchange="OnValidityTargetEntityChanged">
+                                    @foreach (var alvo in ValidityTargets)
+                                    {
+                                        <option value="@alvo.Id">@alvo.Name</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="ide-dict__field">
+                                <label for="ide-dict-validity-target-field">Campo de referência</label>
+                                <select id="ide-dict-validity-target-field" class="ide-dict__input" value="@_validityTargetField"
+                                        @onchange="e => _validityTargetField = e.Value?.ToString() ?? string.Empty">
+                                    @foreach (var campo in ValidityTargetFields())
+                                    {
+                                        <option value="@campo.Name">@campo.Name</option>
+                                    }
+                                </select>
+                                <span class="ide-dict__hint">O valor gravado precisa existir nessa coluna.</span>
+                            </div>
+                        }
+                    }
+                    @if (_validityKind != "None")
+                    {
+                        <div class="ide-dict__field">
+                            <label for="ide-dict-validity-message">Mensagem de erro (opcional)</label>
+                            <input id="ide-dict-validity-message" class="ide-dict__input"
+                                   placeholder="Escolha uma opção válida."
+                                   value="@_validityMessage"
+                                   @oninput="e => _validityMessage = e.Value?.ToString()" />
+                        </div>
+                    }
+
+                    @if (_message is not null)
+                    {
+                        <div role="status" aria-live="polite"
+                             class="ide-dict__status @(_error ? "ide-dict__status--error" : null)">@_message</div>
+                    }
+                    <div class="ide-dict__actions">
+                        @if (!_isSystemField)
+                        {
+                            <XFButton Text="Salvar validade" Variant="XFButtonVariant.Solid" Color="XFButtonColor.Primary" Size="XFExtendedSize.Sm"
+                                      OnClick="SaveValidationAsync" />
+                        }
                     </div>
                 </div>
             }
@@ -438,6 +554,128 @@
         _tab = 0;
         _message = null;
         _error = false;
+        ResetValidityDraft();
+    }
+
+    // -------------------------------------- validade (≈ Column Validation do DCT)
+
+    private string _validityKind = nameof(FieldValidationKind.None);
+    private string _validityChoices = string.Empty;
+    private string _validityMin = string.Empty;
+    private string _validityMax = string.Empty;
+    private string _validityMessage = string.Empty;
+    private string _validityTargetEntity = string.Empty;   // Guid em texto
+    private string _validityTargetField = string.Empty;
+
+    /// <summary>Entidades que podem ser referência do "Deve existir em" (todas menos a atual).</summary>
+    private List<EntityDto> ValidityTargets => Entities
+        .Where(e => _currentEntity is null || e.Id != _currentEntity.Id)
+        .ToList();
+
+    private IEnumerable<EntityFieldDto> ValidityTargetFields()
+        => Entities.FirstOrDefault(e => e.Id.ToString() == _validityTargetEntity)?.Fields
+           ?? Array.Empty<EntityFieldDto>();
+
+    /// <summary>Decodifica a regra gravada no campo para os campos do formulário.</summary>
+    private void ResetValidityDraft()
+    {
+        var regra = _draft?.Validation;
+        _validityKind = (regra?.Kind ?? FieldValidationKind.None).ToString();
+        _validityMessage = regra?.Message ?? string.Empty;
+        _validityChoices = string.Empty;
+        _validityMin = string.Empty;
+        _validityMax = string.Empty;
+        _validityTargetEntity = string.Empty;
+        _validityTargetField = string.Empty;
+
+        switch (regra?.Kind)
+        {
+            case FieldValidationKind.Choices:
+                _validityChoices = regra!.Data ?? string.Empty;
+                break;
+
+            case FieldValidationKind.Range:
+                var (min, max) = FieldValidationRules.ParseRange(regra!.Data);
+                _validityMin = min?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+                _validityMax = max?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+                break;
+
+            case FieldValidationKind.MustExistIn:
+                var alvo = FieldValidationRules.ParseMustExistIn(regra!.Data);
+                if (alvo is not null)
+                {
+                    _validityTargetEntity = alvo.Value.EntityId.ToString();
+                    _validityTargetField = alvo.Value.FieldName;
+                }
+                break;
+        }
+    }
+
+    private void OnValidityKindChanged(ChangeEventArgs e)
+    {
+        _validityKind = e.Value?.ToString() ?? nameof(FieldValidationKind.None);
+        if (_validityKind == nameof(FieldValidationKind.MustExistIn) && _validityTargetEntity.Length == 0)
+        {
+            OnValidityTargetEntityChanged(new ChangeEventArgs { Value = ValidityTargets.FirstOrDefault()?.Id.ToString() });
+        }
+    }
+
+    private void OnValidityTargetEntityChanged(ChangeEventArgs e)
+    {
+        _validityTargetEntity = e.Value?.ToString() ?? string.Empty;
+        _validityTargetField = ValidityTargetFields().FirstOrDefault()?.Name ?? string.Empty;
+    }
+
+    private static decimal? ParseDecimal(string? text) =>
+        decimal.TryParse((text ?? string.Empty).Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var v)
+            ? v
+            : null;
+
+    private async Task SaveValidationAsync()
+    {
+        if (_draft is null || _persisted is null)
+        {
+            return;
+        }
+
+        var kind = Enum.TryParse<FieldValidationKind>(_validityKind, out var k)
+            ? k
+            : FieldValidationKind.None;
+
+        string? data = null;
+        if (kind == FieldValidationKind.Choices)
+        {
+            data = _validityChoices;
+        }
+        else if (kind == FieldValidationKind.Range)
+        {
+            data = FieldValidationRules.FormatRange(ParseDecimal(_validityMin), ParseDecimal(_validityMax));
+        }
+        else if (kind == FieldValidationKind.MustExistIn
+                 && Guid.TryParse(_validityTargetEntity, out var targetId)
+                 && _validityTargetField.Length > 0)
+        {
+            data = FieldValidationRules.FormatMustExistIn(targetId, _validityTargetField);
+        }
+
+        var result = await Dictionaries.SaveFieldValidationAsync(
+            new(_draft.Id, kind, data, _validityMessage));
+
+        if (result.IsSuccess)
+        {
+            _persisted = _persisted with { Validation = result.Value.IsEmpty ? null : result.Value };
+            _draft = _persisted;
+            _message = kind == FieldValidationKind.None
+                ? "Verificação de validade removida."
+                : "Verificação de validade salva.";
+            _error = false;
+        }
+        else
+        {
+            _message = result.Error;
+            _error = true;
+        }
+        StateHasChanged();
     }
 
     private async Task SelectFieldAsync(EntityFieldDto f)
@@ -509,6 +747,7 @@
         {
             _persisted = result.Value;
             _draft = result.Value;
+            ResetValidityDraft();
             _message = $"Coluna '{result.Value.Name}' atualizada.";
             _error = false;
             await ReloadAsync();
@@ -527,6 +766,7 @@
         {
             _draft = _persisted;
         }
+        ResetValidityDraft();
         _errors = new FieldErrors();
         _message = null;
         StateHasChanged();
@@ -674,6 +914,7 @@
                 {
                     _draft = updated;
                     _persisted = updated;
+                    ResetValidityDraft();
                 }
                 else
                 {

@@ -54,6 +54,9 @@ public class EntityField
 
     /// <summary>Modelo de coluna global de onde este campo foi derivado (≈ Derived From).</summary>
     public Guid? DerivedFromId { get; set; }
+
+    /// <summary>Verificação de validade do campo (≈ Column Validation; 1:1, criada sob demanda).</summary>
+    public FieldValidation? Validation { get; set; }
 }
 
 /// <summary>Chave/índice da entidade (≈ ChaveCodigo do Clarion).</summary>

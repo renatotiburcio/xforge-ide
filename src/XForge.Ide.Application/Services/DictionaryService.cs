@@ -1,5 +1,6 @@
 using XForge.Ide.Core.Abstractions;
 using XForge.Ide.Core.Entities;
+using XForge.Ide.Core.Enums;
 using XForge.Ide.Core.Results;
 using Dto = XForge.Ide.Application.Dto;
 
@@ -313,6 +314,107 @@ public class DictionaryService
 
         var modelo = await _dictionaries.GetGlobalFieldAsync(id, ct);
         return modelo is null ? dto : dto with { DerivedFromName = modelo.Name };
+    }
+
+    // --------------------------------------------- verificações de validade (Column Validation)
+
+    /// <summary>
+    /// Grava a verificação de validade do campo (upsert). Com
+    /// <see cref="FieldValidationKind.None"/> remove a regra existente.
+    /// </summary>
+    public async Task<Result<Dto.FieldValidationDto>> SaveFieldValidationAsync(
+        Dto.SaveFieldValidationRequest request, CancellationToken ct = default)
+    {
+        var field = await _dictionaries.GetFieldAsync(request.FieldId, ct);
+        if (field is null)
+        {
+            return Result<Dto.FieldValidationDto>.Failure("Campo não encontrado.");
+        }
+
+        var existente = await _dictionaries.GetFieldValidationAsync(field.Id, ct);
+
+        if (request.Kind == FieldValidationKind.None)
+        {
+            if (existente is not null)
+            {
+                await _dictionaries.DeleteFieldValidationAsync(field.Id, ct);
+            }
+            return Result<Dto.FieldValidationDto>.Success(
+                new Dto.FieldValidationDto(null, FieldValidationKind.None, null, null));
+        }
+
+        var data = (request.Data ?? string.Empty).Trim();
+        var erro = await ValidateValidationDataAsync(field, request.Kind, data, ct);
+        if (erro is not null)
+        {
+            return Result<Dto.FieldValidationDto>.Failure(erro);
+        }
+
+        var message = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim();
+
+        if (existente is null)
+        {
+            var nova = new FieldValidation
+            {
+                FieldId = field.Id,
+                Kind = request.Kind,
+                Data = data,
+                Message = message,
+            };
+            await _dictionaries.AddFieldValidationAsync(nova, ct);
+            return Result<Dto.FieldValidationDto>.Success(Dto.FieldValidationDto.From(nova));
+        }
+
+        existente.Kind = request.Kind;
+        existente.Data = data;
+        existente.Message = message;
+        await _dictionaries.UpdateFieldValidationAsync(existente, ct);
+        return Result<Dto.FieldValidationDto>.Success(Dto.FieldValidationDto.From(existente));
+    }
+
+    /// <summary>Valida os parâmetros conforme o tipo (formato puro + existência do alvo).</summary>
+    private async Task<string?> ValidateValidationDataAsync(
+        EntityField field, FieldValidationKind kind, string data, CancellationToken ct)
+    {
+        switch (kind)
+        {
+            case FieldValidationKind.Choices:
+                return FieldValidationRules.ValidateChoicesData(data);
+
+            case FieldValidationKind.Range:
+                return FieldValidationRules.ValidateRangeData(data);
+
+            case FieldValidationKind.MustExistIn:
+                var alvo = FieldValidationRules.ParseMustExistIn(data);
+                if (alvo is null)
+                {
+                    return "Alvo inválido: escolha a entidade e o campo de referência.";
+                }
+                var (entityId, fieldName) = alvo.Value;
+                var dona = await _dictionaries.GetEntityAsync(field.EntityId, ct);
+                if (dona is null)
+                {
+                    return "Campo não encontrado.";
+                }
+                if (entityId == dona.Id)
+                {
+                    return "\"Deve existir em\" aponta para OUTRA entidade, não para a própria.";
+                }
+                var dictionary = await _dictionaries.GetFullAsync(dona.DictionaryId, ct);
+                var target = dictionary?.Entities.FirstOrDefault(e => e.Id == entityId);
+                if (target is null)
+                {
+                    return "Entidade de referência não encontrada neste dicionário.";
+                }
+                if (!target.Fields.Any(f => f.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return $"O campo '{fieldName}' não existe na entidade {target.Name}.";
+                }
+                return null;
+
+            default:
+                return "Verificação de validade desconhecida.";
+        }
     }
 
     // ------------------------------------------------------------------ Campos

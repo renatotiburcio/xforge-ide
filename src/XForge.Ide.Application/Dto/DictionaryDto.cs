@@ -40,11 +40,27 @@ public record EntityFieldDto(
     /// <summary>Modelo de coluna global de origem (≈ Derived From do DCT).</summary>
     Guid? DerivedFromId = null,
     /// <summary>Nome legível do modelo (preenchido pelo serviço para a UI).</summary>
-    string? DerivedFromName = null)
+    string? DerivedFromName = null,
+    /// <summary>Verificação de validade do campo (≈ Column Validation), quando existir.</summary>
+    FieldValidationDto? Validation = null)
 {
     public static EntityFieldDto From(EntityField f) => new(
         f.Id, f.Name, f.ClrType, f.DbType, f.Length, f.Precision, f.Required,
-        f.Default, f.Picture, f.Label, f.ExternalName, f.SortOrder, f.DerivedFromId);
+        f.Default, f.Picture, f.Label, f.ExternalName, f.SortOrder, f.DerivedFromId,
+        Validation: f.Validation is null ? null : FieldValidationDto.From(f.Validation));
+}
+
+/// <summary>Verificação de validade do campo (≈ "Column Validation" do DCT).</summary>
+public record FieldValidationDto(
+    Guid? Id,
+    FieldValidationKind Kind,
+    string? Data,
+    string? Message)
+{
+    public static FieldValidationDto From(FieldValidation v) => new(v.Id, v.Kind, v.Data, v.Message);
+
+    /// <summary>Regra ausente ou "nenhuma": o campo não tem verificação.</summary>
+    public bool IsEmpty => Kind == FieldValidationKind.None || Data is null or "";
 }
 
 public record EntityKeyDto(Guid Id, string Name, bool IsPrimary, bool IsUnique, string FieldsJson)
@@ -168,6 +184,13 @@ public record CreateFieldRequest(
 public record CreateGlobalFieldRequest(
     Guid DictionaryId, string Name, string ClrType, int? Length, string? Picture,
     string? Label, string? Default, bool Required, string? Description);
+
+/// <summary>
+/// Grava (ou remove, com <see cref="FieldValidationKind.None"/>) a verificação de
+/// validade de um campo. Os dados são validados por FieldValidationRules.
+/// </summary>
+public record SaveFieldValidationRequest(
+    Guid FieldId, FieldValidationKind Kind, string? Data, string? Message);
 
 public record UpdateGlobalFieldRequest(
     Guid GlobalFieldId, string Name, string ClrType, int? Length, string? Picture,

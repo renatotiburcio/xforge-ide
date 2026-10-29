@@ -11,19 +11,29 @@ using XForge.Ide.Templates;
 
 namespace XForge.Ide.Core.Tests;
 
-/// <summary>Base com EF InMemory + serviços reais.</summary>
+/// <summary>
+/// Base com EF em SQLite em memória + serviços reais. O provider é o de produção:
+/// o InMemory não suporta ExecuteDelete/ExecuteUpdate nem as cascatas reais —
+/// testar com outro provider esconde diferenças de comportamento.
+/// </summary>
 public abstract class ServiceTestBase : IDisposable
 {
+    private readonly SqliteConnection _connection;
+
     protected readonly IdeDbContext Db;
     protected readonly ProjectService Projects;
     protected readonly DictionaryService Dictionaries;
 
     protected ServiceTestBase()
     {
+        // a conexão precisa ficar aberta: um banco :memory: morre com ela
+        _connection = new SqliteConnection("Data Source=:memory:");
+        _connection.Open();
         var options = new DbContextOptionsBuilder<IdeDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .UseSqlite(_connection)
             .Options;
         Db = new IdeDbContext(options);
+        Db.Database.EnsureCreated();
 
         IProjectRepository projects = new ProjectRepository(Db);
         IDictionaryRepository dictionaries = new DictionaryRepository(Db);
@@ -31,7 +41,11 @@ public abstract class ServiceTestBase : IDisposable
         Dictionaries = new DictionaryService(dictionaries);
     }
 
-    public void Dispose() => Db.Dispose();
+    public void Dispose()
+    {
+        Db.Dispose();
+        _connection.Dispose();
+    }
 }
 
 public class DictionaryServiceTests : ServiceTestBase

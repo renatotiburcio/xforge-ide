@@ -366,6 +366,34 @@ namespace XForge.Ide.Infrastructure.Migrations
                     b.ToTable("EntityRelations");
                 });
 
+            modelBuilder.Entity("XForge.Ide.Core.Entities.FieldValidation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Data")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("FieldId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FieldId")
+                        .IsUnique();
+
+                    b.ToTable("FieldValidations");
+                });
+
             modelBuilder.Entity("XForge.Ide.Core.Entities.GeneratedPage", b =>
                 {
                     b.Property<Guid>("Id")
@@ -722,6 +750,15 @@ namespace XForge.Ide.Infrastructure.Migrations
                     b.Navigation("ToEntity");
                 });
 
+            modelBuilder.Entity("XForge.Ide.Core.Entities.FieldValidation", b =>
+                {
+                    b.HasOne("XForge.Ide.Core.Entities.EntityField", null)
+                        .WithOne("Validation")
+                        .HasForeignKey("XForge.Ide.Core.Entities.FieldValidation", "FieldId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("XForge.Ide.Core.Entities.AiConversation", b =>
                 {
                     b.Navigation("Messages");
@@ -732,6 +769,11 @@ namespace XForge.Ide.Infrastructure.Migrations
                     b.Navigation("Fields");
 
                     b.Navigation("Keys");
+                });
+
+            modelBuilder.Entity("XForge.Ide.Core.Entities.EntityField", b =>
+                {
+                    b.Navigation("Validation");
                 });
 
             modelBuilder.Entity("XForge.Ide.Core.Entities.IdeDictionary", b =>

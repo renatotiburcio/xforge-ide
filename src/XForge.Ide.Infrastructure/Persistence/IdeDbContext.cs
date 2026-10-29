@@ -29,6 +29,7 @@ public class IdeDbContext : DbContext
     public DbSet<UiSnapshot> UiSnapshots => Set<UiSnapshot>();
     public DbSet<EditorDraft> EditorDrafts => Set<EditorDraft>();
     public DbSet<GlobalField> GlobalFields => Set<GlobalField>();
+    public DbSet<FieldValidation> FieldValidations => Set<FieldValidation>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -174,6 +175,16 @@ public class IdeDbContext : DbContext
         b.Entity<Entity>(e =>
         {
             e.HasMany(x => x.Fields).WithOne().HasForeignKey(x => x.EntityId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // verificação de validade: 1:1 com o campo, exclusão em cascata
+        b.Entity<FieldValidation>(e =>
+        {
+            e.HasOne<EntityField>()
+                .WithOne(f => f.Validation)
+                .HasForeignKey<FieldValidation>(v => v.FieldId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(32);
         });
     }
 }
